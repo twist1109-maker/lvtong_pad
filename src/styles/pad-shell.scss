@@ -41,6 +41,35 @@ html.pad-shell .login-page {
   min-width: 0;
 }
 
+html.pad-shell .left-bottom {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+html.pad-shell .left-bottom > .workflow-icons {
+  grid-row: 1;
+  grid-column: 1;
+  z-index: 1;
+  height: 100%;
+  min-height: 0;
+  flex: none;
+  padding: 0;
+  align-items: center;
+}
+
+html.pad-shell .left-bottom > .truck-scene {
+  grid-row: 1;
+  grid-column: 1;
+  height: auto;
+  flex: none;
+  min-height: 0;
+  align-self: stretch;
+}
+
+html.pad-shell .left-bottom > .hardware-bar {
+  grid-row: 2;
+}
+
 html.pad-shell .panel-header-xray {
   flex-wrap: wrap;
   row-gap: 4px;
