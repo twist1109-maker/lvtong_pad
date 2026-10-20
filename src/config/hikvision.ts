@@ -3,9 +3,9 @@
  * 设备 IP/账号/密码由 GET /api/device/<id>/preview-config 从 devices 表读取。
  *
  * 现场三台（device_id → IP）：
- * - cam_booking：预约机 192.168.88.101 — 预约弹窗画面/对讲 +「预约相机」Tab
- * - cam_lane：车道枪机 192.168.88.103 — 车顶/车头/车尾 + 主页实时视频
- * - cam_ptz：球机 192.168.88.104 — 带云台
+ * - cam_booking：预约机 192.168.88.101 — 画面 WebRTC/WHEP（cam4）；对讲仍可能用插件
+ * - cam_lane：车道枪机 192.168.88.103 — 车顶/车头/车尾 + 主页实时视频（WebRTC/WHEP）
+ * - cam_ptz：球机 192.168.88.104 — 带云台（插件）
  */
 
 /** 与官方包实际落盘路径一致（整包放在 public/hikvision/codebase 下） */
@@ -33,11 +33,22 @@ export const DEFAULT_GUN_DEVICE_ID = 'cam_lane'
 /** 预约弹窗右侧 / 可视对讲：devices.device_id */
 export const TALK_CAMERA_DEVICE_ID = 'cam_booking'
 
-/** 图像采集：需预热的全部物理相机（切换 Tab 不再重新登录） */
-export const HIK_CAPTURE_DEVICE_IDS = [
-  'cam_lane',
-  'cam_ptz',
-  'cam_booking',
+/**
+ * 图像采集：仅预热仍走海康插件的物理机。
+ * cam_lane / cam_booking 画面已改 WHEP，不再进插件预热。
+ */
+export const HIK_CAPTURE_DEVICE_IDS = ['cam_ptz'] as const
+
+/**
+ * 图像采集走 WebRTC 的 Tab：
+ * - 车顶/车头/车尾 → /mtx/cam1/whep（车道枪机）
+ * - 预约相机 → /mtx/cam4/whep（预约机）
+ */
+export const WHEP_CAPTURE_CAMERAS = [
+  '车顶相机',
+  '车头相机',
+  '车尾相机',
+  '预约相机',
 ] as const
 
 /** 已接入的相机 Tab */
@@ -54,4 +65,8 @@ export type HikEnabledCamera = (typeof HIK_ENABLED_CAMERAS)[number]
 
 export function resolveCameraDeviceId(cameraName: string): string {
   return CAMERA_DEVICE_ID[cameraName] || DEFAULT_GUN_DEVICE_ID
+}
+
+export function isWhepCaptureCamera(cameraName: string): boolean {
+  return (WHEP_CAPTURE_CAMERAS as readonly string[]).includes(cameraName)
 }

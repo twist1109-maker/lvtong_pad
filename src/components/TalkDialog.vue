@@ -1,29 +1,37 @@
 <script setup lang="ts">
 /**
  * 可视对讲 — 对齐 Qt TalkDialog.ui / TalkDialog.cpp
- * cam_booking 海康插件预览 + 自动对讲（对齐 lvtong_voice/chat）
+ * 画面：MediaMTX WHEP cam4（预约机）；对讲：海康插件 talkOnly（对齐 BookingDialog）
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getHikCapturePlayer } from '@/composables/hikCaptureContext'
 import { DEFAULT_GUN_DEVICE_ID, TALK_CAMERA_DEVICE_ID } from '@/config/hikvision'
+import { TALK_WHEP_URL } from '@/config/liveVideo'
+import { useWhepPlayer } from '@/composables/useWhepPlayer'
 
 const emit = defineEmits<{
   close: []
 }>()
 
-const liveStageRef = ref<HTMLElement | null>(null)
+const liveVideoRef = ref<HTMLVideoElement | null>(null)
 
-// 复用宿主 player（与 BookingDialog 一致），避免新建第二个 iframe 抢海康单例插件
-const hik = getHikCapturePlayer()
 const {
   status: videoStatus,
-  statusText: videoStatusText,
+  error: videoError,
+  play: playVideo,
+  stop: stopVideo,
+} = useWhepPlayer()
+
+let videoRetryTimer: number | undefined
+
+const hik = getHikCapturePlayer()
+const {
+  status: talkStatus,
   talking,
   talkBusy,
-  setAnchor,
   setTalkOnly,
   ensureDevice,
-  postLayout,
+  hide: hideHik,
   hidePluginOverlay,
   startTalk,
   stopTalk,
@@ -31,17 +39,37 @@ const {
 } = hik
 
 const videoHint = computed(() => {
+  if (videoError.value) return videoError.value
+  if (videoStatus.value === 'connecting') return '连接中…'
   if (videoStatus.value === 'playing') return ''
-  return videoStatusText.value || '视频区域'
+  if (videoStatus.value === 'failed' || videoStatus.value === 'disconnected') {
+    return '连接中断'
+  }
+  if (videoStatus.value === 'error') return videoError.value || '视频连接失败'
+  return '视频区域'
 })
 const showVideoHint = computed(() => videoStatus.value !== 'playing')
 
 const canToggleTalk = computed(
-  () => videoStatus.value === 'playing' && !talkBusy.value,
+  () =>
+    !talkBusy.value &&
+    (talkStatus.value === 'playing' || talking.value || videoStatus.value === 'playing'),
 )
 
+async function startTalkVideo() {
+  const el = liveVideoRef.value
+  if (!el) return
+  try {
+    await playVideo({ video: el, whepUrl: TALK_WHEP_URL })
+  } catch {
+    window.clearTimeout(videoRetryTimer)
+    videoRetryTimer = window.setTimeout(() => {
+      void startTalkVideo()
+    }, 3000)
+  }
+}
+
 async function onClose() {
-  // 停对讲 → HWND 钉屏外 → 切回默认枪机，恢复宿主状态
   try {
     stopTalk()
   } catch {
@@ -54,21 +82,25 @@ async function onClose() {
   } catch {
     /* ignore */
   }
+  hideHik()
   emit('close')
 }
 
 onMounted(async () => {
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  // 对讲需 HWND 可见：取消 talkOnly，锚点设到本弹窗视频区
-  setTalkOnly(false)
-  setAnchor(liveStageRef.value)
+  setTalkOnly(true)
+  hideHik()
+  void startTalkVideo()
+  try {
+    stopTalk()
+  } catch {
+    /* ignore */
+  }
   void ensureDevice(TALK_CAMERA_DEVICE_ID)
-  window.setTimeout(() => postLayout(true), 300)
-  // 等 playing 后自动开对讲（对齐原 autoTalk）
   void (async () => {
     for (let i = 0; i < 80; i++) {
-      if (videoStatus.value === 'playing') break
+      if (talkStatus.value === 'playing' || videoStatus.value === 'playing') break
       await new Promise<void>((r) => window.setTimeout(r, 100))
     }
     await new Promise<void>((r) => window.setTimeout(r, 300))
@@ -77,6 +109,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(videoRetryTimer)
   try {
     stopTalk()
   } catch {
@@ -85,6 +118,8 @@ onBeforeUnmount(() => {
   hidePluginOverlay()
   setTalkOnly(true)
   void ensureDevice(DEFAULT_GUN_DEVICE_ID)
+  hideHik()
+  void stopVideo()
 })
 </script>
 
@@ -94,11 +129,17 @@ onBeforeUnmount(() => {
       <h2 class="dialog-title">可视对讲</h2>
 
       <div class="video-panel">
-        <div ref="liveStageRef" class="live-stage" />
+        <video
+          ref="liveVideoRef"
+          class="live-webrtc"
+          muted
+          autoplay
+          playsinline
+        />
         <div
           v-if="showVideoHint"
           class="video-status"
-          :class="{ err: videoStatus === 'error' }"
+          :class="{ err: videoStatus === 'error' || !!videoError }"
         >
           {{ videoHint }}
         </div>
@@ -117,7 +158,6 @@ onBeforeUnmount(() => {
         <button type="button" class="btn-close" @click="onClose">关 闭</button>
       </div>
     </div>
-    <!-- 不再放 iframe：复用 HikvisionCaptureHost 的宿主 iframe，避免抢海康单例插件 -->
   </div>
 </template>
 
@@ -167,100 +207,72 @@ onBeforeUnmount(() => {
   max-height: 55vh;
   margin: 0 auto;
   flex-shrink: 0;
-  background: #1a1a1a;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
   position: relative;
+  background: #1a1a1a;
+  overflow: hidden;
 }
 
-.live-stage {
-  position: absolute;
-  inset: 0;
+.live-webrtc {
   width: 100%;
   height: 100%;
-  background: #000;
-  z-index: 1;
+  object-fit: contain;
+  background: #1a1a1a;
+  display: block;
 }
 
 .video-status {
-  position: relative;
-  z-index: 2;
-  color: #999;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
   font-size: 16px;
-  user-select: none;
+  color: #999;
   pointer-events: none;
 
   &.err {
     color: #c0392b;
-  }
-
-  &.talking {
-    color: #059669;
-    font-weight: 700;
   }
 }
 
 .bottom-row {
   display: flex;
   justify-content: center;
-  align-items: center;
-  gap: 16px;
-  padding: 18px 0 8px;
-  flex-shrink: 0;
+  gap: 24px;
+  margin-top: 16px;
+  padding-bottom: 8px;
 }
 
 .btn-talk,
 .btn-close {
   min-width: 120px;
   max-width: 120px;
-  padding: 4px 12px;
+  height: 40px;
   border: none;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
-  font-family: inherit;
   cursor: pointer;
 }
 
 .btn-talk {
-  background: #059669;
-  color: #ddd;
+  background: #5fbb9e;
+  color: #fff;
 
   &.on {
-    background: #d97706;
-  }
-
-  &:hover:not(:disabled) {
-    color: #fff;
+    background: #e67e22;
   }
 
   &:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
+    opacity: 0.5;
+    cursor: default;
   }
 }
 
 .btn-close {
-  background: #ef4444;
-  color: #ddd;
-
-  &:hover {
-    color: #fff;
-  }
-}
-
-.hik-iframe-fs {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  border: 0;
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  pointer-events: none;
-  z-index: 1001;
+  background: #e8e8e8;
+  color: #333;
 }
 </style>
