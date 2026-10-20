@@ -1,0 +1,31 @@
+// 设计规范 — 对齐 Qt LvTongPro.ui
+$primary: #5fbb9e;
+$primary-dark: #4da58a;
+$gradient-start: #5fbb9e;
+$gradient-mid: #f0f9f5;
+$gradient-end: #ffffff;
+
+$text-dark: #2c3e50;
+$text-gray: #666666;
+$text-light: #95a5a6;
+$text-placeholder: #bbbbbb;
+
+$border-color: #e0e0e0;
+$card-radius: 12px;
+
+$btn-blue: #1677ff;
+$btn-preview-bg: #dbeafe;
+$btn-preview-text: #304daf;
+$accept-green: #059669;
+$reject-red: #ef4444;
+
+$header-height: 48px;
+$min-app-width: 1896px;
+
+// 自适应缩放设计基准（与 src/config/layout.ts 保持一致）
+$design-width: 1920px;
+$design-height: 1080px;
+
+// Qt 布局比例
+$left-panel-width: 1168px;
+$right-panel-width: 722px;

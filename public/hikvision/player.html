@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
+  <title>Hik Embed Player</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+    }
+    /* 由父页下发屏幕坐标绝对定位，使插件 HWND 落在黑色预览区 */
+    #divPlugin {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1px;
+      height: 1px;
+      pointer-events: auto;
+      background: transparent;
+    }
+  </style>
+  <script src="/hikvision/codebase/demo/jquery-1.7.1.min.js"></script>
+  <script id="videonode" src="/hikvision/codebase/demo/codebase/webVideoCtrl.js"></script>
+</head>
+<body>
+  <div id="divPlugin"></div>
+  <script src="/hikvision/embed-player.js"></script>
+</body>
+</html>
