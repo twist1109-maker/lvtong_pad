@@ -38,7 +38,7 @@ import CaptureCameraDialog from '@/components/capture/CaptureCameraDialog.vue'
 import HikvisionCaptureHost from '@/components/capture/HikvisionCaptureHost.vue'
 import type { CaptureKind } from '@/components/capture/CaptureCameraDialog.vue'
 import DrivingLicenseDialog from '@/components/capture/DrivingLicenseDialog.vue'
-import PadCaptureSheet from '@/modules/padCapture/PadCaptureSheet.vue'
+import PasscodeScanDialog from '@/modules/padCapture/PasscodeScanDialog.vue'
 import { useBookingStore } from '@/modules/booking'
 import type { BookingAcceptPayload, BookingComingPayload } from '@/modules/booking'
 import { useRouter } from 'vue-router'
@@ -53,13 +53,22 @@ const bookingStore = useBookingStore()
 const router = useRouter()
 
 const showHistory = ref(false)
-/** 平板拍照采集板。挂上后不销毁，关闭只是藏起来，避免未提交的照片被清掉 */
-const showPadCapture = ref(false)
-const padCaptureMounted = ref(false)
+/** 通行码：下拉选相机 / 高拍仪；相机打开扫码弹窗 */
+const showPasscodeMenu = ref(false)
+const showPasscodeScan = ref(false)
 
-function openPadCapture() {
-  padCaptureMounted.value = true
-  showPadCapture.value = true
+function togglePasscodeMenu() {
+  showPasscodeMenu.value = !showPasscodeMenu.value
+}
+
+function onPasscodeCamera() {
+  showPasscodeMenu.value = false
+  showPasscodeScan.value = true
+}
+
+function onPasscodeGaopai() {
+  showPasscodeMenu.value = false
+  // 高拍仪扫码后续接入，暂时无操作
 }
 /** 从查验次数打开历史时的预填条件 */
 const historyPreset = ref<{
@@ -232,6 +241,9 @@ function onXrayDocClick(ev: MouseEvent) {
   const t = ev.target as HTMLElement | null
   if (t?.closest('.xray-dropdown')) return
   xrayOpenMenu.value = null
+  if (!t?.closest('.passcode-scan-wrap')) {
+    showPasscodeMenu.value = false
+  }
 }
 
 async function applyXrayProcess() {
@@ -2689,7 +2701,6 @@ const anyDialogOpen = computed(
           <div class="panel-header">
             <img src="/assets/img/image_capture.png" class="panel-icon" alt="" />
             <span class="panel-title">图像采集</span>
-            <button type="button" class="pad-photo-btn" @click="openPadCapture">平板拍照</button>
           </div>
           <div class="capture-grid">
             <button
@@ -2751,9 +2762,24 @@ const anyDialogOpen = computed(
           <div class="form-header">
             <img src="/assets/img/lv_info.png" class="panel-icon" alt="" />
             <span class="panel-title">绿通信息</span>
-            <button class="header-icon-btn" title="通行码">
-              <img src="/assets/img/ze-scan.png" alt="" />
-            </button>
+            <div class="passcode-scan-wrap">
+              <button
+                type="button"
+                class="header-icon-btn"
+                title="通行码"
+                @click.stop="togglePasscodeMenu"
+              >
+                <img src="/assets/img/ze-scan.png" alt="" />
+              </button>
+              <div v-if="showPasscodeMenu" class="passcode-scan-menu" @click.stop>
+                <button type="button" class="passcode-scan-item" @click="onPasscodeCamera">
+                  相机
+                </button>
+                <button type="button" class="passcode-scan-item" @click="onPasscodeGaopai">
+                  高拍仪
+                </button>
+              </div>
+            </div>
           </div>
 
           <div class="form-body">
@@ -2850,11 +2876,9 @@ const anyDialogOpen = computed(
       </section>
     </div>
 
-    <PadCaptureSheet
-      v-if="padCaptureMounted"
-      v-show="showPadCapture"
-      :active="showPadCapture"
-      @close="showPadCapture = false"
+    <PasscodeScanDialog
+      v-if="showPasscodeScan"
+      @close="showPasscodeScan = false"
     />
 
     <!-- 预约弹窗 — 对齐 OrderDialog -->
@@ -3503,6 +3527,45 @@ const anyDialogOpen = computed(
 }
 
 .form-header { padding-left: 20px; }
+
+.passcode-scan-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.passcode-scan-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 112px;
+  z-index: 300;
+  padding: 4px 0;
+  background: #fff;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+
+.passcode-scan-item {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: $text-dark;
+  text-align: center;
+  white-space: nowrap;
+
+  &:hover {
+    background: #e8f6f0;
+    color: $accept-green;
+  }
+}
 
 .form-body {
   flex: 1;
