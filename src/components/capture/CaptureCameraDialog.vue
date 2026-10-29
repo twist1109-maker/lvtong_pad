@@ -2,18 +2,15 @@
 /**
  * 图像采集弹窗 — 1:1 对齐 Qt GetPic/Tail/Top/Goods/Evidence (1400×713)
  * - 车顶/车头/车尾：WebRTC cam1；预约相机：WebRTC cam4；截帧拍照
- * - 球机：海康插件 + 云台
+ * - 球机：WebRTC cam5；云台按键暂保留，等待后端控制方案
  * - 货物/证据才有「图片数量」+「选中删除」（GetGoods/Evidence）；车头/尾/顶无
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   HIK_DISABLED_CAMERAS,
   HIK_ENABLED_CAMERAS,
-  isWhepCaptureCamera,
-  resolveCameraDeviceId,
 } from '@/config/hikvision'
 import { resolveCaptureWhepUrl } from '@/config/liveVideo'
-import { getHikCapturePlayer } from '@/composables/hikCaptureContext'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
 
 export type CaptureKind = 'head' | 'tail' | 'top' | 'goods' | 'evidence'
@@ -63,8 +60,8 @@ const thumbH = 110
 const activeCamera = ref(DEFAULT_CAMERA[props.kind])
 /** 对齐 switchToCamera：仅球机显示云台 */
 const showPtz = computed(() => activeCamera.value === '球机')
-/** 枪机三 Tab + 预约相机 → WHEP；球机 → 海康插件 */
-const useWhepPreview = computed(() => isWhepCaptureCamera(activeCamera.value))
+/** Pad 端全部相机统一使用 WHEP，不加载海康本地插件。 */
+const useWhepPreview = computed(() => true)
 const switchingCamera = ref(false)
 
 const photos = ref<string[]>([])
@@ -72,11 +69,8 @@ const selectedIndex = ref(0)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const capturing = ref(false)
 const closing = ref(false)
-/** 黑色预览锚点：把屏幕坐标发给全屏 iframe，在内部摆插件 */
-const liveStageRef = ref<HTMLElement | null>(null)
 const whepVideoRef = ref<HTMLVideoElement | null>(null)
 
-const hik = getHikCapturePlayer()
 const {
   status: whepStatus,
   error: whepError,
@@ -84,43 +78,21 @@ const {
   stop: stopWhep,
 } = useWhepPlayer()
 
-const {
-  status: hikStatus,
-  statusText: hikStatusText,
-  currentDeviceId,
-  setAnchor,
-  setTalkOnly,
-  ensureDevice,
-  hide: hideHik,
-  captureJpegDataUrl,
-  postLayout,
-  ptzStart,
-  ptzStop,
-  setPreset,
-  goPreset,
-} = hik
-
 const liveHint = computed(() => {
-  if (useWhepPreview.value) {
-    if (whepError.value) return whepError.value
-    if (whepStatus.value === 'connecting') return '连接中…'
-    if (whepStatus.value === 'playing') return ''
-    if (whepStatus.value === 'failed' || whepStatus.value === 'disconnected') {
-      return '连接中断，正在重试…'
-    }
-    if (whepStatus.value === 'error') return whepError.value || '实时视频连接失败'
-    return '准备播放…'
+  if (whepError.value) return whepError.value
+  if (whepStatus.value === 'connecting') return '连接中…'
+  if (whepStatus.value === 'playing') return ''
+  if (whepStatus.value === 'failed' || whepStatus.value === 'disconnected') {
+    return '连接中断，正在重试…'
   }
-  return hikStatusText.value || '实时摄像头画面区域'
+  if (whepStatus.value === 'error') return whepError.value || '实时视频连接失败'
+  return '准备播放…'
 })
 const showLiveHint = computed(() => {
   if (switchingCamera.value) return false
-  if (useWhepPreview.value) return whepStatus.value !== 'playing'
-  return hikStatus.value !== 'playing'
+  return whepStatus.value !== 'playing'
 })
-const previewPlaying = computed(() =>
-  useWhepPreview.value ? whepStatus.value === 'playing' : hikStatus.value === 'playing',
-)
+const previewPlaying = computed(() => whepStatus.value === 'playing')
 
 /** 球机预置位 1-9：本机记住「已设置」状态；真正坐标在摄像机内 */
 const PRESET_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
@@ -156,28 +128,12 @@ function markPresetConfigured(id: number) {
   const next = new Set(presetConfigured.value)
   next.add(id)
   presetConfigured.value = next
-  savePresetConfigured(currentDeviceId.value)
+  savePresetConfigured('cam_ptz')
 }
 
 async function onPresetClick(id: number) {
-  if (!showPtz.value || !previewPlaying.value || presetBusy.value) return
-  presetBusy.value = true
-  presetHint.value = ''
-  try {
-    if (presetSetMode.value) {
-      await setPreset(id)
-      markPresetConfigured(id)
-      presetHint.value = `预置位 ${id} 已设置`
-      presetSetMode.value = false
-    } else {
-      await goPreset(id)
-      presetHint.value = `已转到预置位 ${id}`
-    }
-  } catch (e) {
-    presetHint.value = e instanceof Error ? e.message : '预置位操作失败'
-  } finally {
-    presetBusy.value = false
-  }
+  if (!showPtz.value || presetBusy.value) return
+  presetHint.value = `预置位 ${id} 控制暂未接入`
 }
 
 function onPresetKeydown(ev: KeyboardEvent) {
@@ -234,8 +190,6 @@ watch(
 )
 
 async function startWhepPreview(cameraName: string) {
-  hideHik()
-  setAnchor(null)
   await nextTick()
   const el = whepVideoRef.value
   if (!el) return
@@ -246,42 +200,22 @@ async function startWhepPreview(cameraName: string) {
   }
 }
 
-async function startHikPreview(deviceId: string) {
-  await stopWhep()
-  setTalkOnly(false)
-  if (liveStageRef.value) setAnchor(liveStageRef.value)
-  await ensureDevice(deviceId)
-  window.setTimeout(() => postLayout(true), 120)
-}
-
 async function applyPreviewForCamera(name: string) {
-  if (isWhepCaptureCamera(name)) {
-    await startWhepPreview(name)
-    return
-  }
-  loadPresetConfigured(resolveCameraDeviceId(name))
-  await startHikPreview(resolveCameraDeviceId(name))
+  await startWhepPreview(name)
 }
 
 onMounted(async () => {
   syncKind()
-  loadPresetConfigured(resolveCameraDeviceId(activeCamera.value))
-  window.addEventListener('keydown', onPresetKeydown)
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  // 关闭对讲弹窗后 talkOnlyMode 可能仍为 true，导致 measureAnchor 返回屏外坐标 → 画面空白
-  setTalkOnly(false)
   await applyPreviewForCamera(activeCamera.value)
 })
 
 function detachPreview() {
   void stopWhep()
-  hideHik()
-  setAnchor(null)
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onPresetKeydown)
   detachPreview()
 })
 
@@ -290,22 +224,14 @@ async function selectCamera(name: string) {
   if (name === activeCamera.value) return
 
   const prevName = activeCamera.value
-  const nextWhep = isWhepCaptureCamera(name)
-  const prevWhep = isWhepCaptureCamera(prevName)
-  const nextId = resolveCameraDeviceId(name)
-  const prevId = currentDeviceId.value
   activeCamera.value = name
 
   // 同一路 WHEP（如枪机三 Tab）只改高亮；枪机↔预约需换流
   if (
-    nextWhep &&
-    prevWhep &&
     resolveCaptureWhepUrl(name) === resolveCaptureWhepUrl(prevName)
   ) {
     return
   }
-  // 同一物理海康设备只改高亮
-  if (!nextWhep && !prevWhep && nextId === prevId) return
 
   switchingCamera.value = true
   presetSetMode.value = false
@@ -319,18 +245,19 @@ async function selectCamera(name: string) {
 
 /** 海康 PTZ 索引：↖5 ↑1 ↗7 ←3 ↻9 →4 ↙6 ↓2 ↘8 −11 +10 */
 function onPtzPointerDown(ev: PointerEvent, index: number) {
-  if (!showPtz.value || !previewPlaying.value) return
+  if (!showPtz.value) return
   const el = ev.currentTarget as HTMLElement
   try {
     el.setPointerCapture(ev.pointerId)
   } catch {
     /* ignore */
   }
-  if (index === 9) {
-    ptzStart(9)
-    return
-  }
-  ptzStart(index)
+  presetHint.value = `云台控制 ${index} 暂未接入`
+}
+
+function onPtzClick(index: number) {
+  if (!showPtz.value) return
+  presetHint.value = `云台控制 ${index} 暂未接入`
 }
 
 function onPtzPointerUp(ev: PointerEvent, index: number) {
@@ -341,9 +268,6 @@ function onPtzPointerUp(ev: PointerEvent, index: number) {
   } catch {
     /* ignore */
   }
-  // 自动为点击切换，不在 pointerup 停
-  if (index === 9) return
-  ptzStop(index)
 }
 
 function pushPhoto(url: string) {
@@ -378,18 +302,9 @@ async function onCaptureClick() {
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
   try {
-    if (useWhepPreview.value && whepStatus.value === 'playing') {
+    if (whepStatus.value === 'playing') {
       pushPhoto(captureFromWhepVideo())
       return
-    }
-    if (!useWhepPreview.value && hikStatus.value === 'playing') {
-      try {
-        const dataUrl = await captureJpegDataUrl()
-        pushPhoto(dataUrl)
-        return
-      } catch {
-        // SDK 抓图失败时回退本地选图，避免阻断现有流程
-      }
     }
   } finally {
     capturing.value = false
@@ -510,8 +425,8 @@ function openPreview() {
           </div>
 
           <div class="live-wrap">
-            <div ref="liveStageRef" class="live-stage">
-              <!-- WHEP Tab：video；球机：黑区作海康插件锚点 -->
+            <div class="live-stage">
+              <!-- Pad 端所有相机均使用浏览器原生 WHEP 视频。 -->
               <video
                 v-show="useWhepPreview"
                 ref="whepVideoRef"
@@ -526,8 +441,7 @@ function openPreview() {
               class="live-status"
               :class="{
                 err:
-                  (useWhepPreview && (whepStatus === 'error' || !!whepError)) ||
-                  (!useWhepPreview && hikStatus === 'error'),
+                  whepStatus === 'error' || !!whepError,
               }"
             >
               {{ liveHint }}
@@ -581,7 +495,7 @@ function openPreview() {
                       type="button"
                       class="ptz-btn"
                       title="自动巡航"
-                      @click.prevent="ptzStart(9)"
+                      @click.prevent="onPtzClick(9)"
                     >
                       ↻
                     </button>

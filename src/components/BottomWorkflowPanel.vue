@@ -19,6 +19,7 @@ defineProps<{
   kv160?: string
   ma160?: string
   temp160?: string
+  talkDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +51,7 @@ const emit = defineEmits<{
       :temp160="temp160"
       :xray-bits="xrayBits"
       :signal-lights="signalLights"
+      :talk-disabled="talkDisabled"
       @talk-click="emit('talkClick')"
       @dm-temp-click="emit('dmTempClick')"
     />

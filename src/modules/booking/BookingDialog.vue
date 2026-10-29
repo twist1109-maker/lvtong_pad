@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 预约处理 — 1:1 对齐 Qt OrderDialog.ui / OrderDialog.cpp
- * 右侧：WHEP 看画面（cam4）+ 复用 Dashboard 海康长连接只做对讲（HWND 屏外）
+ * 右侧：WHEP 看画面（cam4）。Pad 暂不接入对讲硬件。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -10,12 +10,7 @@ import SlipToggle from './components/SlipToggle.vue'
 import { useBookingDialog } from './composables/useBookingDialog'
 import type { BookingAcceptPayload } from './types'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
-import { getHikCapturePlayer } from '@/composables/hikCaptureContext'
 import { TALK_WHEP_URL } from '@/config/liveVideo'
-import {
-  DEFAULT_GUN_DEVICE_ID,
-  TALK_CAMERA_DEVICE_ID,
-} from '@/config/hikvision'
 
 const emit = defineEmits<{
   close: []
@@ -83,40 +78,16 @@ async function startBookingVideo() {
   }
 }
 
-// ---- 对讲：复用 Dashboard 长连接宿主，避免双 iframe 抢插件/TwoWayAudio ----
-const hik = getHikCapturePlayer()
-const {
-  status: talkStatus,
-  statusText: talkStatusText,
-  talking,
-  talkBusy,
-  hide: hideHikTalk,
-  hidePluginOverlay,
-  setTalkOnly,
-  ensureDevice: ensureTalkDevice,
-  stopTalk,
-  startTalk,
-  toggleTalk,
-} = hik
-
 /** 后端 /booking/open 阻塞播 step2 期间 */
 const announcePlaying = ref(true)
-
-const talkHint = computed(() => {
-  if (announcePlaying.value) return '播报中'
-  if (talkBusy.value) return talking.value ? '对讲连接中…' : '正在停止对讲…'
-  if (talking.value) return '对讲中'
-  if (talkStatus.value === 'error') return talkStatusText.value || '对讲失败'
-  if (talkStatus.value === 'loading') return '对讲连接中…'
-  if (talkStatus.value === 'playing') return '可对讲'
-  return ''
-})
-const canToggleTalk = computed(
-  () =>
-    !announcePlaying.value &&
-    !talkBusy.value &&
-    (talkStatus.value === 'playing' || talking.value),
+const talking = ref(false)
+const talkHint = computed(() =>
+  announcePlaying.value ? '播报中' : 'Pad 对讲设备暂未接入',
 )
+const canToggleTalk = computed(() => false)
+function toggleTalk() {
+  // 预留按钮位置；新对讲硬件到场后接入浏览器原生方案。
+}
 
 /** 左侧雷达图是否已在浏览器解码完成 */
 const radarImageReady = ref(false)
@@ -125,7 +96,6 @@ watch(radarImageUrl, () => {
 })
 
 const videoReady = computed(() => videoStatus.value === 'playing')
-const talkReady = computed(() => talkStatus.value === 'playing' || talking.value)
 const radarReady = computed(
   () => !!radarImageUrl.value && radarImageReady.value && !loading.value,
 )
@@ -168,21 +138,6 @@ function onRadarImageError() {
   radarImageReady.value = false
 }
 
-async function releaseBookingTalk() {
-  try {
-    stopTalk()
-  } catch {
-    /* ignore */
-  }
-  setTalkOnly(false)
-  try {
-    await ensureTalkDevice(DEFAULT_GUN_DEVICE_ID)
-  } catch {
-    /* ignore */
-  }
-  hideHikTalk()
-}
-
 async function handleConfirmYes() {
   try {
     try {
@@ -190,7 +145,6 @@ async function handleConfirmYes() {
     } catch {
       /* ignore */
     }
-    await releaseBookingTalk()
     const result = await confirmYes()
     if (result?.kind === 'accept') {
       emit('accept', result.payload)
@@ -219,46 +173,23 @@ function onAcceptClick() {
   requestConfirm('accept')
 }
 
-watch(confirmVisible, (visible) => {
-  if (visible) hidePluginOverlay()
-})
-
 onMounted(async () => {
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  setTalkOnly(true)
-  hideHikTalk()
-  // 1) 开窗立刻：WHEP 视频（不占 TwoWayAudio）
+  // 开窗立刻加载 WHEP 视频。
   void startBookingVideo()
-  try {
-    stopTalk()
-  } catch {
-    /* ignore */
-  }
-  // 2) 切到预约机（长连接已预热，仅 hik-switch）
-  void ensureTalkDevice(TALK_CAMERA_DEVICE_ID)
-  // 3) /open 等 step2；雷达图与之并行立刻拉取
+  // /open 等 step2；雷达图与之并行立刻拉取。
   announcePlaying.value = true
   try {
     await initDialog({ fetchRadar: true })
   } finally {
     announcePlaying.value = false
   }
-  // 4) 播报结束、后端 release TwoWayAudio 后再开对讲
-  void (async () => {
-    for (let i = 0; i < 80; i++) {
-      if (talkStatus.value === 'playing') break
-      await new Promise<void>((r) => window.setTimeout(r, 100))
-    }
-    await new Promise<void>((r) => window.setTimeout(r, 450))
-    await startTalk()
-  })()
 })
 
 onBeforeUnmount(() => {
   window.clearTimeout(videoRetryTimer)
   void stopVideo()
-  void releaseBookingTalk()
 })
 </script>
 
@@ -315,12 +246,11 @@ onBeforeUnmount(() => {
           :title="talkHint || '对讲'"
           @click="toggleTalk"
         >
-          {{ announcePlaying ? '播报中' : talking ? '停止对讲' : '对讲' }}
+          {{ announcePlaying ? '播报中' : '对讲暂未接入' }}
         </button>
         <span
           v-if="talkHint && !announcePlaying"
           class="talk-hint"
-          :class="{ err: talkStatus === 'error' }"
         >
           {{ talkHint }}
         </span>

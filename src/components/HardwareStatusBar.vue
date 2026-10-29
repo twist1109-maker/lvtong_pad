@@ -18,6 +18,7 @@ const props = withDefaults(
     temp160?: string
     xrayBits?: PlcXrayBits
     signalLights?: PlcSignalLights
+    talkDisabled?: boolean
   }>(),
   {
     kv200: '-',
@@ -26,6 +27,7 @@ const props = withDefaults(
     kv160: '-',
     ma160: '-',
     temp160: '-',
+    talkDisabled: false,
     xrayBits: () => ({
       source200: false,
       source160: false,
@@ -85,8 +87,18 @@ const fillLightIcon = computed(() =>
         <img src="/assets/img/tempature_green.png" class="mini-icon" alt="" />
       </button>
       <span class="mini-label">对讲</span>
-      <button type="button" class="icon-btn" title="视频喊话" @click="emit('talkClick')">
-        <img src="/assets/img/a_camera_talk.png" class="mini-icon" alt="" />
+      <button
+        type="button"
+        class="icon-btn"
+        :title="talkDisabled ? 'Pad 对讲设备暂未接入' : '视频喊话'"
+        :disabled="talkDisabled"
+        @click="emit('talkClick')"
+      >
+        <img
+          :src="talkDisabled ? '/assets/img/a_camera_talk_gray.png' : '/assets/img/a_camera_talk.png'"
+          class="mini-icon"
+          alt=""
+        />
       </button>
       <span class="mini-label">信号灯</span>
       <img :src="redIcon" class="plc-icon" :class="{ on: signalLights.red }" title="红灯" alt="" />

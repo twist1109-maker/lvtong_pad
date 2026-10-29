@@ -21,7 +21,6 @@ import {
   type XrayMachinePhase,
 } from '@/utils/plcXrayStatus'
 import BookingDialog from '@/modules/booking/BookingDialog.vue'
-import TalkDialog from '@/components/TalkDialog.vue'
 import AgriculturalSelect from '@/components/AgriculturalSelect.vue'
 import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
 import CarSizeDialog from '@/components/CarSizeDialog.vue'
@@ -35,7 +34,6 @@ import DetailDialog from '@/modules/history/DetailDialog.vue'
 import type { InspectionDetail } from '@/modules/history'
 import { formatVehicleSizeDisplay } from '@/modules/history/utils/passCodeDisplay'
 import CaptureCameraDialog from '@/components/capture/CaptureCameraDialog.vue'
-import HikvisionCaptureHost from '@/components/capture/HikvisionCaptureHost.vue'
 import type { CaptureKind } from '@/components/capture/CaptureCameraDialog.vue'
 import DrivingLicenseDialog from '@/components/capture/DrivingLicenseDialog.vue'
 import PasscodeScanDialog from '@/modules/padCapture/PasscodeScanDialog.vue'
@@ -124,8 +122,6 @@ function _fmtXrayNum(v: unknown): string {
 }
 const showUserMgr = ref(false)
 const showUsrMgrDenied = ref(false)
-/** 可视对讲 — 对齐 Qt TalkDialog（底部喇叭按钮） */
-const showTalkDialog = ref(false)
 /** 对齐 Qt：弹窗贴在对应按钮下方 */
 const plcAnchor = ref<{ left: number; top: number } | null>(null)
 const aiAnchor = ref<{ left: number; top: number } | null>(null)
@@ -2498,7 +2494,6 @@ const anyDialogOpen = computed(
     showHistory.value ||
     showPlcControl.value ||
     showAiStatus.value ||
-    showTalkDialog.value ||
     showDeviceStatus.value ||
     showUserMgr.value ||
     showUsrMgrDenied.value ||
@@ -2515,8 +2510,6 @@ const anyDialogOpen = computed(
 
 <template>
   <div class="dashboard">
-    <!-- 图像采集海康预览长连接（弹窗关闭也不断流） -->
-    <HikvisionCaptureHost />
     <AppHeader
       :username="auth.user?.realName"
       :ai-online="aiOnline"
@@ -2628,8 +2621,8 @@ const anyDialogOpen = computed(
             :kv160="xrayTelemetry.kv160"
             :ma160="xrayTelemetry.ma160"
             :temp160="xrayTelemetry.temp160"
+            talk-disabled
             @workflow-click="onWorkflowClick"
-            @talk-click="showTalkDialog = true"
           />
         </div>
       </section>
@@ -2889,11 +2882,6 @@ const anyDialogOpen = computed(
       @reject="onBookingReject"
     />
 
-    <!-- 可视对讲 — 对齐 TalkDialog（预约弹窗右半视频独立出来） -->
-    <TalkDialog
-      v-if="showTalkDialog"
-      @close="showTalkDialog = false"
-    />
 <!-- 农产品选择弹窗 -->
     <AgriculturalSelect
       ref="agriculturalSelectRef"
