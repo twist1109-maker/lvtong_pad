@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 图像采集弹窗 — 1:1 对齐 Qt GetPic/Tail/Top/Goods/Evidence (1400×713)
- * - 车顶/车头/车尾：WebRTC cam1；预约相机：WebRTC cam4；截帧拍照
+ * - 默认直接使用平板后置摄像头；可切换网络相机截帧拍照。
+ * - 车顶/车头/车尾：WebRTC cam1；预约相机：WebRTC cam4
  * - 球机：WebRTC cam5；云台由 Flask 后端通过海康 ISAPI 控制
  * - 货物/证据才有「图片数量」+「选中删除」（GetGoods/Evidence）；车头/尾/顶无
  */
@@ -12,6 +13,7 @@ import {
 } from '@/config/hikvision'
 import { resolveCaptureWhepUrl } from '@/config/liveVideo'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
+import { useDeviceCamera } from '@/composables/useDeviceCamera'
 import {
   controlPtzApi,
   controlPtzPresetApi,
@@ -38,14 +40,7 @@ const TITLE_MAP: Record<CaptureKind, string> = {
   evidence: '证据照',
 }
 
-/** 打开弹窗时默认选中的相机 Tab（货物/证据仍默认车头） */
-const DEFAULT_CAMERA: Record<CaptureKind, string> = {
-  head: '车头相机',
-  tail: '车尾相机',
-  top: '车顶相机',
-  goods: '车头相机',
-  evidence: '车头相机',
-}
+const DEVICE_CAMERA = '平板相机'
 
 const MAX_MAP: Partial<Record<CaptureKind, number>> = {
   goods: 16,
@@ -53,7 +48,7 @@ const MAX_MAP: Partial<Record<CaptureKind, number>> = {
 }
 
 /** 截图顺序：车顶 → 车头 → 车尾 → 球机 → 预约 */
-const CAMERAS = ['车顶相机', '车头相机', '车尾相机', '球机', '预约相机'] as const
+const CAMERAS = [DEVICE_CAMERA, '车顶相机', '车头相机', '车尾相机', '球机', '预约相机'] as const
 const DISABLED_CAMERAS = new Set<string>(HIK_DISABLED_CAMERAS)
 const ENABLED_CAMERAS = new Set<string>(HIK_ENABLED_CAMERAS)
 
@@ -62,19 +57,20 @@ const maxCount = computed(() => MAX_MAP[props.kind] ?? 1)
 const thumbW = computed(() => (isMulti.value ? 110 : 200))
 const thumbH = 110
 
-const activeCamera = ref(DEFAULT_CAMERA[props.kind])
+const activeCamera = ref<string>(DEVICE_CAMERA)
 /** 对齐 switchToCamera：仅球机显示云台 */
 const showPtz = computed(() => activeCamera.value === '球机')
-/** Pad 端全部相机统一使用 WHEP，不加载海康本地插件。 */
-const useWhepPreview = computed(() => true)
+const useWhepPreview = computed(() => activeCamera.value !== DEVICE_CAMERA)
 const switchingCamera = ref(false)
 
 const photos = ref<string[]>([])
 const selectedIndex = ref(0)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 const capturing = ref(false)
 const closing = ref(false)
 const whepVideoRef = ref<HTMLVideoElement | null>(null)
+const deviceVideoRef = ref<HTMLVideoElement | null>(null)
+const deviceCamera = useDeviceCamera(deviceVideoRef)
+const captureError = ref('')
 
 const {
   status: whepStatus,
@@ -84,6 +80,10 @@ const {
 } = useWhepPlayer()
 
 const liveHint = computed(() => {
+  if (captureError.value) return captureError.value
+  if (!useWhepPreview.value) {
+    return deviceCamera.error.value || (deviceCamera.status.value === 'opening' ? '正在打开摄像头…' : '对准目标后点击拍照')
+  }
   if (whepError.value) return whepError.value
   if (whepStatus.value === 'connecting') return '连接中…'
   if (whepStatus.value === 'playing') return ''
@@ -94,10 +94,13 @@ const liveHint = computed(() => {
   return '准备播放…'
 })
 const showLiveHint = computed(() => {
+  if (captureError.value || !useWhepPreview.value) return true
   if (switchingCamera.value) return false
   return whepStatus.value !== 'playing'
 })
-const previewPlaying = computed(() => whepStatus.value === 'playing')
+const previewPlaying = computed(() => useWhepPreview.value
+  ? whepStatus.value === 'playing'
+  : deviceCamera.status.value === 'ready')
 
 /** 球机预置位 1-9：本机记住「已设置」状态；真正坐标在摄像机内 */
 const PRESET_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
@@ -207,11 +210,12 @@ const selectedSrc = computed(() => {
 })
 
 function isCameraDisabled(name: string) {
+  if (name === DEVICE_CAMERA) return false
   return DISABLED_CAMERAS.has(name) || !ENABLED_CAMERAS.has(name)
 }
 
 function syncKind() {
-  activeCamera.value = DEFAULT_CAMERA[props.kind]
+  activeCamera.value = DEVICE_CAMERA
   photos.value = [...(props.initialImages ?? [])].filter(Boolean)
   selectedIndex.value = 0
 }
@@ -241,7 +245,14 @@ async function startWhepPreview(cameraName: string) {
 }
 
 async function applyPreviewForCamera(name: string) {
-  await startWhepPreview(name)
+  captureError.value = ''
+  if (name === DEVICE_CAMERA) {
+    await stopWhep()
+    if (!closing.value) await deviceCamera.start()
+  } else {
+    deviceCamera.stop()
+    await startWhepPreview(name)
+  }
 }
 
 onMounted(async () => {
@@ -251,14 +262,17 @@ onMounted(async () => {
   window.addEventListener('blur', stopActivePtz)
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  if (closing.value) return
   await applyPreviewForCamera(activeCamera.value)
 })
 
 function detachPreview() {
+  deviceCamera.stop()
   void stopWhep()
 }
 
 onBeforeUnmount(() => {
+  closing.value = true
   window.removeEventListener('keydown', onPresetKeydown)
   window.removeEventListener('blur', stopActivePtz)
   stopActivePtz()
@@ -267,7 +281,7 @@ onBeforeUnmount(() => {
 
 async function selectCamera(name: string) {
   if (isCameraDisabled(name) || switchingCamera.value || closing.value) return
-  if (name === activeCamera.value) return
+  if (name === activeCamera.value && previewPlaying.value) return
 
   const prevName = activeCamera.value
   if (prevName === '球机') stopActivePtz()
@@ -275,6 +289,8 @@ async function selectCamera(name: string) {
 
   // 同一路 WHEP（如枪机三 Tab）只改高亮；枪机↔预约需换流
   if (
+    name !== DEVICE_CAMERA && prevName !== DEVICE_CAMERA &&
+    name !== prevName &&
     resolveCaptureWhepUrl(name) === resolveCaptureWhepUrl(prevName)
   ) {
     return
@@ -419,26 +435,23 @@ function captureFromWhepVideo(): string {
 }
 
 async function onCaptureClick() {
+  if (capturing.value || closing.value) return
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
+  captureError.value = ''
   try {
-    if (whepStatus.value === 'playing') {
+    if (!useWhepPreview.value) {
+      pushPhoto(deviceCamera.captureJpeg())
+    } else if (whepStatus.value === 'playing') {
       pushPhoto(captureFromWhepVideo())
-      return
+    } else {
+      captureError.value = '相机画面未就绪，请等待连接或切换到平板相机'
     }
+  } catch (cause) {
+    captureError.value = cause instanceof Error ? cause.message : '拍照失败，请重试'
   } finally {
     capturing.value = false
   }
-  fileInputRef.value?.click()
-}
-
-function onFileChosen(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  const url = URL.createObjectURL(file)
-  pushPhoto(url)
 }
 
 function selectPhoto(idx: number) {
@@ -546,7 +559,14 @@ function openPreview() {
 
           <div class="live-wrap">
             <div class="live-stage">
-              <!-- Pad 端所有相机均使用浏览器原生 WHEP 视频。 -->
+              <video
+                v-show="!useWhepPreview"
+                ref="deviceVideoRef"
+                class="whep-live"
+                muted
+                autoplay
+                playsinline
+              />
               <video
                 v-show="useWhepPreview"
                 ref="whepVideoRef"
@@ -561,10 +581,15 @@ function openPreview() {
               class="live-status"
               :class="{
                 err:
-                  whepStatus === 'error' || !!whepError,
+                  !!captureError || (useWhepPreview ? whepStatus === 'error' || !!whepError : !!deviceCamera.error.value),
               }"
             >
               {{ liveHint }}
+              <button
+                v-if="!useWhepPreview && deviceCamera.status.value === 'error'"
+                type="button"
+                @click="selectCamera(DEVICE_CAMERA)"
+              >重新打开摄像头</button>
             </div>
           </div>
 
@@ -745,7 +770,7 @@ function openPreview() {
               <button
                 type="button"
                 class="btn-shot"
-                :disabled="capturing"
+                :disabled="capturing || !previewPlaying || closing"
                 @click="onCaptureClick"
               >
                 {{ capturing ? '拍照中…' : '拍照' }}
@@ -756,13 +781,6 @@ function openPreview() {
         </section>
       </div>
 
-      <input
-        ref="fileInputRef"
-        type="file"
-        accept="image/*"
-        class="file-hide"
-        @change="onFileChosen"
-      />
     </div>
   </div>
   </Teleport>
@@ -1318,7 +1336,4 @@ function openPreview() {
   }
 }
 
-.file-hide {
-  display: none;
-}
 </style>

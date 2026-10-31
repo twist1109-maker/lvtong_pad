@@ -5,10 +5,10 @@
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
+import { useDeviceCamera } from '@/composables/useDeviceCamera'
 import {
   decodeQrFromCanvas,
   emptyCaptureJson,
-  fileToJpeg,
   isPasscodeContentValid,
   photoStamp,
   uploadMobileJson,
@@ -17,14 +17,15 @@ import {
 const emit = defineEmits<{ close: [] }>()
 
 const videoRef = ref<HTMLVideoElement | null>(null)
-const fileRef = ref<HTMLInputElement | null>(null)
+const camera = useDeviceCamera(videoRef)
+const { status: cameraStatus, error: cameraError } = camera
 const uploading = ref(false)
+const capturing = ref(false)
+const decoding = ref(false)
 const tipVisible = ref(false)
 const tipMessage = ref('')
 const tipOk = ref(true)
 
-const secureCamera = typeof window !== 'undefined' && window.isSecureContext
-let stream: MediaStream | null = null
 let scanTimer = 0
 let closed = false
 
@@ -35,9 +36,7 @@ function showTip(message: string, ok = true) {
 }
 
 function stopStream() {
-  stream?.getTracks().forEach((t) => t.stop())
-  stream = null
-  if (videoRef.value) videoRef.value.srcObject = null
+  camera.stop()
 }
 
 function stopScan() {
@@ -55,59 +54,36 @@ function onClose() {
 }
 
 async function openStream(): Promise<boolean> {
-  if (!secureCamera || !navigator.mediaDevices?.getUserMedia) {
-    return false
-  }
-  try {
-    stopStream()
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' } },
-    })
-    const video = videoRef.value
-    if (!video) throw new Error('摄像头画面未就绪')
-    video.srcObject = stream
-    await video.play()
-    return true
-  } catch {
-    stopStream()
-    return false
-  }
+  if (closed) return false
+  const ok = await camera.start()
+  if (ok) scheduleScan()
+  return ok
 }
 
 function scheduleScan() {
-  if (closed) return
+  stopScan()
+  if (closed || uploading.value || tipVisible.value || cameraStatus.value !== 'ready') return
   scanTimer = window.setTimeout(() => {
     void scanOnce()
   }, 400)
 }
 
 async function scanOnce() {
-  if (closed || uploading.value) return
-  const video = videoRef.value
-  if (!video || !video.videoWidth) {
+  if (closed || uploading.value || capturing.value || decoding.value || tipVisible.value) return
+  decoding.value = true
+  try {
+    const text = await decodeQrFromCanvas(camera.captureCanvas())
+    if (!closed && text) await acceptPasscode(text)
+  } catch {
+    // 预览首帧尚未到达时继续等待。
+  } finally {
+    decoding.value = false
     scheduleScan()
-    return
   }
-  const canvas = document.createElement('canvas')
-  canvas.width = video.videoWidth
-  canvas.height = video.videoHeight
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    scheduleScan()
-    return
-  }
-  ctx.drawImage(video, 0, 0)
-  const text = await decodeQrFromCanvas(canvas)
-  if (text) {
-    await acceptPasscode(text)
-    return
-  }
-  scheduleScan()
 }
 
 async function acceptPasscode(raw: string) {
-  if (uploading.value) return
+  if (closed || uploading.value) return
   if (!isPasscodeContentValid(raw)) {
     showTip('通行码内容无效', false)
     scheduleScan()
@@ -118,8 +94,15 @@ async function acceptPasscode(raw: string) {
   const name = `photo_${photoStamp()}.json`
   const json = emptyCaptureJson()
   json.passcodeQRCodeInfo = raw
-  const ok = await uploadMobileJson(name, json)
-  uploading.value = false
+  let ok = false
+  try {
+    ok = await uploadMobileJson(name, json)
+  } catch {
+    ok = false
+  } finally {
+    uploading.value = false
+  }
+  if (closed) return
   if (ok) {
     stopStream()
     showTip('通行码信息上传成功 !', true)
@@ -132,59 +115,33 @@ async function acceptPasscode(raw: string) {
 function onTipClose() {
   tipVisible.value = false
   if (tipOk.value) onClose()
+  else scheduleScan()
 }
 
-function openCapture() {
-  fileRef.value?.click()
-}
+async function captureCurrentFrame() {
+  if (closed || capturing.value || uploading.value || decoding.value) return
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('图片无法读取'))
-    img.src = url
-  })
-}
-
-async function decodeBlob(blob: Blob): Promise<string | null> {
-  const url = URL.createObjectURL(blob)
+  capturing.value = true
+  stopScan()
   try {
-    const img = await loadImage(url)
-    const canvas = document.createElement('canvas')
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.drawImage(img, 0, 0)
-    return decodeQrFromCanvas(canvas)
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-async function onFileChosen(ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  try {
-    const blob = await fileToJpeg(file)
-    const text = await decodeBlob(blob)
+    const text = await decodeQrFromCanvas(camera.captureCanvas())
+    if (closed) return
     if (!text) {
-      showTip('未识别到通行码', false)
+      showTip('当前画面未识别到通行码，请对准后重试', false)
+      scheduleScan()
       return
     }
     await acceptPasscode(text)
-  } catch {
-    showTip('图片无法读取', false)
+  } catch (cause) {
+    if (!closed) showTip(cause instanceof Error ? cause.message : '拍照识别失败，请重试', false)
+  } finally {
+    capturing.value = false
   }
 }
 
 onMounted(async () => {
   await nextTick()
-  const ok = await openStream()
-  if (ok) scheduleScan()
+  await openStream()
 })
 
 onBeforeUnmount(() => {
@@ -207,28 +164,29 @@ onBeforeUnmount(() => {
           <video ref="videoRef" class="scan-video" autoplay playsinline muted />
           <div class="scan-frame" aria-hidden="true" />
           <p v-if="uploading" class="scan-hint">正在上传通行码…</p>
+          <p v-else-if="cameraError" class="scan-hint">{{ cameraError }}</p>
+          <p v-else-if="cameraStatus === 'opening'" class="scan-hint">正在打开摄像头…</p>
           <p v-else class="scan-hint">将二维码置于框内，自动识别</p>
         </div>
       </div>
 
       <div class="scan-footer">
-        <button type="button" class="btn-primary" :disabled="uploading" @click="openCapture">
-          拍摄
+        <button v-if="cameraStatus === 'error'" type="button" class="btn-secondary" @click="openStream">
+          重新打开摄像头
+        </button>
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="uploading || capturing || decoding || cameraStatus !== 'ready'"
+          @click="captureCurrentFrame"
+        >
+          {{ capturing ? '识别中…' : '直接拍照' }}
         </button>
         <button type="button" class="btn-secondary" :disabled="uploading" @click="onClose">
           取消
         </button>
       </div>
     </div>
-
-    <input
-      ref="fileRef"
-      type="file"
-      accept="image/*"
-      capture="environment"
-      class="file-hide"
-      @change="onFileChosen"
-    />
 
     <QtMessageBox
       v-if="tipVisible"
@@ -393,7 +351,4 @@ onBeforeUnmount(() => {
   }
 }
 
-.file-hide {
-  display: none;
-}
 </style>

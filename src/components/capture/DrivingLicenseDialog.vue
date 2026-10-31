@@ -2,11 +2,12 @@
 /**
  * 行驶证弹窗 — 1:1 对齐 Qt GetDrivingPicDialog.ui / .cpp
  * 尺寸 702×700；主行驶证 / 挂车证各高 260；底栏按钮区
- * 有图点击预览（对齐 openUrl）；空态 Web 可选本地图（Qt 由高拍仪写入）
+ * 有图点击预览；空态直接打开设备摄像头拍照。
  * AI 裁剪由主页静默完成，弹窗只负责查看/删图/关闭回写
  */
 import { ref, watch } from 'vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
+import DeviceCameraDialog from '@/components/capture/DeviceCameraDialog.vue'
 
 const props = defineProps<{
   licenseSrc?: string
@@ -29,7 +30,6 @@ const confirmVisible = ref(false)
 let pendingDel: 'main' | 'gc' | null = null
 
 const pickTarget = ref<'main' | 'gc' | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const tipVisible = ref(false)
 const tipMessage = ref('')
@@ -85,31 +85,20 @@ function onAreaClick(which: 'main' | 'gc') {
     return
   }
   pickTarget.value = which
-  fileInputRef.value?.click()
 }
 
-function onFileChosen(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file || !pickTarget.value) return
-  const reader = new FileReader()
+function onCameraCapture(dataUrl: string) {
   const target = pickTarget.value
+  if (!target) return
   pickTarget.value = null
-  reader.onload = () => {
-    const dataUrl = String(reader.result || '')
-    if (!dataUrl) return
-    if (target === 'main') {
-      if (license.value.startsWith('blob:')) URL.revokeObjectURL(license.value)
-      license.value = dataUrl
-      licenseStitched.value = ''
-    } else {
-      if (licenseGc.value.startsWith('blob:')) URL.revokeObjectURL(licenseGc.value)
-      licenseGc.value = dataUrl
-      licenseStitched.value = ''
-    }
+  if (target === 'main') {
+    if (license.value.startsWith('blob:')) URL.revokeObjectURL(license.value)
+    license.value = dataUrl
+  } else {
+    if (licenseGc.value.startsWith('blob:')) URL.revokeObjectURL(licenseGc.value)
+    licenseGc.value = dataUrl
   }
-  reader.readAsDataURL(file)
+  licenseStitched.value = ''
 }
 
 /** blob:/http(s) → dataURL，保证提交后后端能落 -main/-hang */
@@ -176,6 +165,7 @@ async function stitchVerticalDataUrl(src1: string, src2: string): Promise<string
 
 /** 对齐 onClose：关窗并回写路径（主/挂分开 + 拼接图） */
 async function onClose() {
+  pickTarget.value = null
   try {
     // 提交依赖 dataURL/磁盘路径；blob: 后端无法读取，关窗前强制转 dataURL
     if (license.value.startsWith('blob:')) {
@@ -229,6 +219,7 @@ async function onClose() {
           <div class="group-title">主行驶证</div>
           <div class="license-view" @click="onAreaClick('main')">
             <img v-if="license" :src="license" alt="" />
+            <span v-else>点击拍摄主行驶证</span>
           </div>
         </div>
 
@@ -236,6 +227,7 @@ async function onClose() {
           <div class="group-title">挂车证</div>
           <div class="license-view" @click="onAreaClick('gc')">
             <img v-if="licenseGc" :src="licenseGc" alt="" />
+            <span v-else>点击拍摄挂车证</span>
           </div>
         </div>
 
@@ -246,14 +238,14 @@ async function onClose() {
         </div>
       </div>
 
-      <input
-        ref="fileInputRef"
-        type="file"
-        accept="image/*"
-        class="file-hide"
-        @change="onFileChosen"
-      />
     </div>
+
+    <DeviceCameraDialog
+      v-if="pickTarget"
+      :title="pickTarget === 'main' ? '拍摄主行驶证' : '拍摄挂车证'"
+      @capture="onCameraCapture"
+      @close="pickTarget = null"
+    />
 
     <QtMessageBox
       v-if="confirmVisible"
@@ -461,7 +453,4 @@ async function onClose() {
   }
 }
 
-.file-hide {
-  display: none;
-}
 </style>
