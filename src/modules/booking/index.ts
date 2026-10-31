@@ -1,6 +1,7 @@
 export { default as BookingDialog } from './BookingDialog.vue'
 export type {
   BookingAcceptPayload,
+  BookingAcceptedPayload,
   BookingComingPayload,
   BookingConfirmConfig,
   BookingConfirmKind,

@@ -38,7 +38,11 @@ import type { CaptureKind } from '@/components/capture/CaptureCameraDialog.vue'
 import DrivingLicenseDialog from '@/components/capture/DrivingLicenseDialog.vue'
 import PasscodeScanDialog from '@/modules/padCapture/PasscodeScanDialog.vue'
 import { useBookingStore } from '@/modules/booking'
-import type { BookingAcceptPayload, BookingComingPayload } from '@/modules/booking'
+import type {
+  BookingAcceptPayload,
+  BookingAcceptedPayload,
+  BookingComingPayload,
+} from '@/modules/booking'
 import { useRouter } from 'vue-router'
 import { toApiUrl, toStoragePath, joinImagePaths } from '@/utils/imagePath'
 import { processImage } from '@/utils/imageProcess'
@@ -2113,7 +2117,7 @@ function setupWS() {
   wsStore.subscribe('booking', handleBookingComing)
 
   wsStore.subscribe('booking_accepted', (msg) => {
-    const data = msg.data as BookingAcceptPayload | undefined
+    const data = msg.data as BookingAcceptedPayload | undefined
     laneOccupied.value = false
     gateReleased.value = false
     radarObjectCount.value = 0
@@ -2121,6 +2125,8 @@ function setupWS() {
       bookingStore.applyAccept({
         vehicleHeight: data.vehicleHeight,
         carHeadLength: data.carHeadLength,
+        // 后端给光机使用 large，前端预约车型使用 big。
+        vehicleType: data.vehicleType === 'large' ? 'big' : 'small',
         xrayEnabled: data.xrayEnabled,
         linePosition: data.linePosition ?? 0.5,
         radarHeadImageUrl: data.radarHeadImageUrl,

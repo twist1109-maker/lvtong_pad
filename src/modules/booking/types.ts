@@ -55,6 +55,26 @@ export interface BookingAcceptPayload {
 }
 
 /**
+ * 后端 booking_accepted WebSocket 数据。
+ * 注意：后端光机车型使用 small | large，前端编辑态使用 small | big。
+ */
+export interface BookingAcceptedPayload {
+  vehicleHeight: number
+  carHeadLength: number
+  vehicleType: 'small' | 'large'
+  xrayEnabled: boolean
+  linePosition?: number
+  radarHeadImageUrl?: string
+  acceptanceTime?: string
+  btnPrebookTime?: string
+  opengateTime?: string
+  openlightscreenTime?: string
+  closelightscreenTime?: string
+  cdPhotoTime?: string
+  operator?: string
+}
+
+/**
  * 主流程检测状态 — 对齐 LvTongPro 成员
  * GET /api/booking/state
  */
