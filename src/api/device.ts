@@ -40,6 +40,59 @@ export function getDevicePreviewConfigApi(deviceId: string) {
   )
 }
 
+export type PtzDirection =
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'up-left'
+  | 'down-left'
+  | 'up-right'
+  | 'down-right'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'auto-pan'
+
+export interface PtzCommandResult {
+  deviceId: string
+  action: 'start' | 'stop' | 'set' | 'goto'
+  direction?: PtzDirection
+  speed?: number
+  preset?: number
+}
+
+/** 后端通过海康 ISAPI 控制球机；Pad 浏览器不需要海康插件。 */
+export function controlPtzApi(
+  deviceId: string,
+  action: 'start' | 'stop',
+  direction: PtzDirection,
+  speed = 45,
+) {
+  return request<PtzCommandResult>(
+    `/device/${encodeURIComponent(deviceId)}/ptz/continuous`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ action, direction, speed }),
+      timeout: 7000,
+    },
+  )
+}
+
+export function controlPtzPresetApi(
+  deviceId: string,
+  action: 'set' | 'goto',
+  preset: number,
+) {
+  return request<PtzCommandResult>(
+    `/device/${encodeURIComponent(deviceId)}/ptz/preset`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ action, preset }),
+      timeout: 7000,
+    },
+  )
+}
+
 /** POST /api/device/voice/acquire — 开对讲前必须拿到锁 */
 export function acquireVoiceChannelApi(opts?: {
   owner?: 'talk' | 'announce'

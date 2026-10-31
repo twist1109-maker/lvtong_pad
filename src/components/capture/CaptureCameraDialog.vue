@@ -2,7 +2,7 @@
 /**
  * 图像采集弹窗 — 1:1 对齐 Qt GetPic/Tail/Top/Goods/Evidence (1400×713)
  * - 车顶/车头/车尾：WebRTC cam1；预约相机：WebRTC cam4；截帧拍照
- * - 球机：WebRTC cam5；云台按键暂保留，等待后端控制方案
+ * - 球机：WebRTC cam5；云台由 Flask 后端通过海康 ISAPI 控制
  * - 货物/证据才有「图片数量」+「选中删除」（GetGoods/Evidence）；车头/尾/顶无
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -12,6 +12,11 @@ import {
 } from '@/config/hikvision'
 import { resolveCaptureWhepUrl } from '@/config/liveVideo'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
+import {
+  controlPtzApi,
+  controlPtzPresetApi,
+  type PtzDirection,
+} from '@/api/device'
 
 export type CaptureKind = 'head' | 'tail' | 'top' | 'goods' | 'evidence'
 
@@ -100,6 +105,25 @@ const presetSetMode = ref(false)
 const presetBusy = ref(false)
 const presetHint = ref('')
 const presetConfigured = ref<Set<number>>(new Set())
+const PTZ_DEVICE_ID = 'cam_ptz'
+const PTZ_SPEED = 45
+const PTZ_HEARTBEAT_MS = 1500
+const PTZ_DIRECTIONS: Record<number, PtzDirection> = {
+  1: 'up',
+  2: 'down',
+  3: 'left',
+  4: 'right',
+  5: 'up-left',
+  6: 'down-left',
+  7: 'up-right',
+  8: 'down-right',
+  9: 'auto-pan',
+  10: 'zoom-in',
+  11: 'zoom-out',
+}
+const activePtzIndex = ref<number | null>(null)
+let ptzHeartbeatTimer: number | null = null
+let ptzCommandQueue: Promise<void> = Promise.resolve()
 
 function presetStorageKey(deviceId: string) {
   return `gcms_ptz_presets_${deviceId || 'cam_ptz'}`
@@ -132,8 +156,24 @@ function markPresetConfigured(id: number) {
 }
 
 async function onPresetClick(id: number) {
-  if (!showPtz.value || presetBusy.value) return
-  presetHint.value = `预置位 ${id} 控制暂未接入`
+  if (!showPtz.value || !previewPlaying.value || presetBusy.value) return
+  const action = presetSetMode.value ? 'set' : 'goto'
+  presetBusy.value = true
+  presetHint.value = action === 'set' ? `正在保存预置位 ${id}…` : `正在转到预置位 ${id}…`
+  try {
+    await controlPtzPresetApi(PTZ_DEVICE_ID, action, id)
+    if (action === 'set') {
+      markPresetConfigured(id)
+      presetSetMode.value = false
+      presetHint.value = `预置位 ${id} 已保存`
+    } else {
+      presetHint.value = `已转到预置位 ${id}`
+    }
+  } catch (error) {
+    presetHint.value = error instanceof Error ? error.message : '预置位操作失败'
+  } finally {
+    presetBusy.value = false
+  }
 }
 
 function onPresetKeydown(ev: KeyboardEvent) {
@@ -206,6 +246,9 @@ async function applyPreviewForCamera(name: string) {
 
 onMounted(async () => {
   syncKind()
+  loadPresetConfigured(PTZ_DEVICE_ID)
+  window.addEventListener('keydown', onPresetKeydown)
+  window.addEventListener('blur', stopActivePtz)
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   await applyPreviewForCamera(activeCamera.value)
@@ -216,6 +259,9 @@ function detachPreview() {
 }
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onPresetKeydown)
+  window.removeEventListener('blur', stopActivePtz)
+  stopActivePtz()
   detachPreview()
 })
 
@@ -224,6 +270,7 @@ async function selectCamera(name: string) {
   if (name === activeCamera.value) return
 
   const prevName = activeCamera.value
+  if (prevName === '球机') stopActivePtz()
   activeCamera.value = name
 
   // 同一路 WHEP（如枪机三 Tab）只改高亮；枪机↔预约需换流
@@ -244,20 +291,92 @@ async function selectCamera(name: string) {
 }
 
 /** 海康 PTZ 索引：↖5 ↑1 ↗7 ←3 ↻9 →4 ↙6 ↓2 ↘8 −11 +10 */
+function enqueuePtzCommand(command: () => Promise<unknown>) {
+  const run = ptzCommandQueue.then(command, command)
+  ptzCommandQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
+function clearPtzHeartbeat() {
+  if (ptzHeartbeatTimer !== null) {
+    window.clearTimeout(ptzHeartbeatTimer)
+    ptzHeartbeatTimer = null
+  }
+}
+
+function schedulePtzHeartbeat(index: number) {
+  clearPtzHeartbeat()
+  ptzHeartbeatTimer = window.setTimeout(() => {
+    if (activePtzIndex.value !== index) return
+    const direction = PTZ_DIRECTIONS[index]
+    void enqueuePtzCommand(() =>
+      controlPtzApi(PTZ_DEVICE_ID, 'start', direction, PTZ_SPEED),
+    ).then(
+      () => schedulePtzHeartbeat(index),
+      (error) => {
+        if (activePtzIndex.value === index) {
+          presetHint.value = error instanceof Error ? error.message : '云台控制失败'
+          stopActivePtz()
+        }
+      },
+    )
+  }, PTZ_HEARTBEAT_MS)
+}
+
+function startPtz(index: number) {
+  if (!showPtz.value || !previewPlaying.value) return
+  const direction = PTZ_DIRECTIONS[index]
+  if (!direction) return
+  if (activePtzIndex.value !== null) stopActivePtz()
+  activePtzIndex.value = index
+  presetHint.value = index === 9 ? '自动巡航已开启，再点一次停止' : '云台控制中…'
+  void enqueuePtzCommand(() =>
+    controlPtzApi(PTZ_DEVICE_ID, 'start', direction, PTZ_SPEED),
+  ).then(
+    () => {
+      if (activePtzIndex.value === index) schedulePtzHeartbeat(index)
+    },
+    (error) => {
+      if (activePtzIndex.value !== index) return
+      activePtzIndex.value = null
+      clearPtzHeartbeat()
+      presetHint.value = error instanceof Error ? error.message : '云台控制失败'
+    },
+  )
+}
+
+function stopActivePtz() {
+  const index = activePtzIndex.value
+  if (index === null) return
+  activePtzIndex.value = null
+  clearPtzHeartbeat()
+  const direction = PTZ_DIRECTIONS[index]
+  void enqueuePtzCommand(() =>
+    controlPtzApi(PTZ_DEVICE_ID, 'stop', direction, PTZ_SPEED),
+  ).catch((error) => {
+    presetHint.value = error instanceof Error ? error.message : '停止云台失败'
+  })
+}
+
 function onPtzPointerDown(ev: PointerEvent, index: number) {
-  if (!showPtz.value) return
+  if (!showPtz.value || !previewPlaying.value) return
   const el = ev.currentTarget as HTMLElement
   try {
     el.setPointerCapture(ev.pointerId)
   } catch {
     /* ignore */
   }
-  presetHint.value = `云台控制 ${index} 暂未接入`
+  startPtz(index)
 }
 
 function onPtzClick(index: number) {
-  if (!showPtz.value) return
-  presetHint.value = `云台控制 ${index} 暂未接入`
+  if (!showPtz.value || !previewPlaying.value) return
+  if (activePtzIndex.value === index) {
+    stopActivePtz()
+    presetHint.value = '自动巡航已停止'
+  } else {
+    startPtz(index)
+  }
 }
 
 function onPtzPointerUp(ev: PointerEvent, index: number) {
@@ -268,6 +387,7 @@ function onPtzPointerUp(ev: PointerEvent, index: number) {
   } catch {
     /* ignore */
   }
+  if (activePtzIndex.value === index) stopActivePtz()
 }
 
 function pushPhoto(url: string) {
@@ -458,43 +578,53 @@ function openPreview() {
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 5)"
                       @pointerup.prevent="onPtzPointerUp($event, 5)"
                       @pointercancel="onPtzPointerUp($event, 5)"
+                      @lostpointercapture="onPtzPointerUp($event, 5)"
                     >
                       ↖
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 1)"
                       @pointerup.prevent="onPtzPointerUp($event, 1)"
                       @pointercancel="onPtzPointerUp($event, 1)"
+                      @lostpointercapture="onPtzPointerUp($event, 1)"
                     >
                       ↑
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 7)"
                       @pointerup.prevent="onPtzPointerUp($event, 7)"
                       @pointercancel="onPtzPointerUp($event, 7)"
+                      @lostpointercapture="onPtzPointerUp($event, 7)"
                     >
                       ↗
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 3)"
                       @pointerup.prevent="onPtzPointerUp($event, 3)"
                       @pointercancel="onPtzPointerUp($event, 3)"
+                      @lostpointercapture="onPtzPointerUp($event, 3)"
                     >
                       ←
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
-                      title="自动巡航"
+                      :class="{ active: activePtzIndex === 9 }"
+                      :disabled="!previewPlaying"
+                      title="自动巡航（再次点击停止）"
                       @click.prevent="onPtzClick(9)"
                     >
                       ↻
@@ -502,45 +632,55 @@ function openPreview() {
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 4)"
                       @pointerup.prevent="onPtzPointerUp($event, 4)"
                       @pointercancel="onPtzPointerUp($event, 4)"
+                      @lostpointercapture="onPtzPointerUp($event, 4)"
                     >
                       →
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 6)"
                       @pointerup.prevent="onPtzPointerUp($event, 6)"
                       @pointercancel="onPtzPointerUp($event, 6)"
+                      @lostpointercapture="onPtzPointerUp($event, 6)"
                     >
                       ↙
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 2)"
                       @pointerup.prevent="onPtzPointerUp($event, 2)"
                       @pointercancel="onPtzPointerUp($event, 2)"
+                      @lostpointercapture="onPtzPointerUp($event, 2)"
                     >
                       ↓
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 8)"
                       @pointerup.prevent="onPtzPointerUp($event, 8)"
                       @pointercancel="onPtzPointerUp($event, 8)"
+                      @lostpointercapture="onPtzPointerUp($event, 8)"
                     >
                       ↘
                     </button>
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 11)"
                       @pointerup.prevent="onPtzPointerUp($event, 11)"
                       @pointercancel="onPtzPointerUp($event, 11)"
+                      @lostpointercapture="onPtzPointerUp($event, 11)"
                     >
                       −
                     </button>
@@ -550,9 +690,11 @@ function openPreview() {
                     <button
                       type="button"
                       class="ptz-btn"
+                      :disabled="!previewPlaying"
                       @pointerdown.prevent="onPtzPointerDown($event, 10)"
                       @pointerup.prevent="onPtzPointerUp($event, 10)"
                       @pointercancel="onPtzPointerUp($event, 10)"
+                      @lostpointercapture="onPtzPointerUp($event, 10)"
                     >
                       +
                     </button>
@@ -989,10 +1131,18 @@ function openPreview() {
     color: #fff;
   }
 
-  &:active {
+  &:active,
+  &.active {
     background: #388e3c;
     border: 2px solid #2e7d32;
     color: #fff;
+  }
+
+  &:disabled {
+    background: #e5e7eb;
+    border-color: #9ca3af;
+    color: #9ca3af;
+    cursor: not-allowed;
   }
 }
 
