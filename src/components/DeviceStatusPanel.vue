@@ -94,8 +94,9 @@ const dialogStyle = computed(() => {
   const top = props.anchor?.top ?? 72
   const w = 235
   const h = 400
-  const maxLeft = Math.max(0, window.innerWidth - w - 4)
-  const maxTop = Math.max(0, window.innerHeight - h - 4)
+  const canvas = document.querySelector('.screen-scaler-stage') as HTMLElement | null
+  const maxLeft = Math.max(0, (canvas?.offsetWidth ?? window.innerWidth) - w - 4)
+  const maxTop = Math.max(0, (canvas?.offsetHeight ?? window.innerHeight) - h - 4)
   return {
     left: `${Math.min(Math.max(0, left), maxLeft)}px`,
     top: `${Math.min(Math.max(0, top), maxTop)}px`,

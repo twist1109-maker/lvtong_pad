@@ -5,6 +5,7 @@
  * 字段名对齐 JsonUtil.CaptureImgEntity。提交整单时不带通行码，通行码单独上传。
  */
 import { appConfig } from '@/config/env'
+import { parsePasscode } from './passcode'
 
 export interface CaptureJson {
   carHeadImg: string
@@ -56,10 +57,7 @@ export function photoStamp(date = new Date()): string {
 
 /** 对齐后端 _parse_passcode：至少 14 段，且车牌展示号非空，才视为有效通行码 */
 export function isPasscodeContentValid(raw: string): boolean {
-  const parts = raw.split('|')
-  if (parts.length < 14) return false
-  const display = (parts[0] ?? '').trim().replace(/_[0-9]+$/, '')
-  return display.length > 0
+  return parsePasscode(raw) !== null
 }
 
 export function passcodeDisplayPlate(raw: string): string {
@@ -116,6 +114,11 @@ export async function uploadMobileJson(
   json: CaptureJson,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (signal?.aborted) return false
+  signal?.addEventListener('abort', abort, { once: true })
+  const timeout = setTimeout(abort, 15000)
   const form = new FormData()
   const file = new Blob([JSON.stringify(json)], { type: 'application/json' })
   form.append('file', file, filename)
@@ -123,11 +126,14 @@ export async function uploadMobileJson(
     const res = await fetch(mobileUrl('/mobile/upload/json'), {
       method: 'POST',
       body: form,
-      signal,
+      signal: controller.signal,
     })
     return readCode(res)
   } catch {
     return false
+  } finally {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
   }
 }
 
@@ -193,6 +199,42 @@ export function fileToJpeg(file: File, maxEdge = 1920, quality = 0.85): Promise<
 
 let qrReader: import('@zxing/browser').BrowserQRCodeReader | null = null
 
+/** 与 PC 后台相同：从通行码原文生成标准 QR 图，本地回填无需等 WebSocket。 */
+export async function createPasscodeQrImage(raw: string): Promise<string> {
+  const { QRCodeWriter, BarcodeFormat, EncodeHintType } = await import('@zxing/library')
+  const matrix = new QRCodeWriter().encode(raw, BarcodeFormat.QR_CODE, 300, 300,
+    new Map([[EncodeHintType.CHARACTER_SET, 'UTF-8']]))
+  const canvas = document.createElement('canvas')
+  canvas.width = matrix.getWidth()
+  canvas.height = matrix.getHeight()
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('无法生成通行码图片')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = '#000'
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) if (matrix.get(x, y)) ctx.fillRect(x, y, 1, 1)
+  }
+  return canvas.toDataURL('image/png')
+}
+
+function qrCanvas(source: HTMLCanvasElement, center: boolean) {
+  const edge = Math.min(source.width, source.height) * 0.8
+  const width = center ? edge : source.width
+  const height = center ? edge : source.height
+  const size = fitSize(width, height, 1600)
+  const canvas = document.createElement('canvas')
+  // 白边兼容二维码贴边／缺少静区的画面。保留长宽比例，不裁掉全帧中的其他区域。
+  canvas.width = size.width + 48
+  canvas.height = size.height + 48
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(source, (source.width - width) / 2, (source.height - height) / 2,
+    width, height, 24, 24, size.width, size.height)
+  return canvas
+}
+
 export async function decodeQrFromCanvas(canvas: HTMLCanvasElement): Promise<string | null> {
   const Detector = (
     globalThis as unknown as {
@@ -212,10 +254,16 @@ export async function decodeQrFromCanvas(canvas: HTMLCanvasElement): Promise<str
   }
   try {
     if (!qrReader) {
-      const { BrowserQRCodeReader } = await import('@zxing/browser')
-      qrReader = new BrowserQRCodeReader()
+      const [{ BrowserQRCodeReader }, { DecodeHintType }] = await Promise.all([
+        import('@zxing/browser'), import('@zxing/library'),
+      ])
+      qrReader = new BrowserQRCodeReader(new Map([[DecodeHintType.TRY_HARDER, true]]))
     }
-    return qrReader.decodeFromCanvas(canvas).getText()
+    // 全帧优先，随后尝试中心区域和原始分辨率，兼容没有 BarcodeDetector 的平板浏览器。
+    for (const candidate of [qrCanvas(canvas, false), qrCanvas(canvas, true), canvas]) {
+      try { return qrReader.decodeFromCanvas(candidate).getText() } catch { /* 下一种取景 */ }
+    }
+    return null
   } catch {
     return null
   }

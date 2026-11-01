@@ -28,7 +28,7 @@ onMounted(() => { void camera.start() })
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="#app-overlay-root">
     <div class="camera-overlay" @click.self="close">
       <section class="camera-dialog" role="dialog" aria-modal="true" :aria-label="title">
         <header>{{ title }}<button type="button" aria-label="关闭" @click="close">×</button></header>

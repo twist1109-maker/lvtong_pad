@@ -1,3 +1,10 @@
+/** 通行码原始金额单位为分；仅展示转元，提交仍保留原始协议数值。 */
+export function formatPasscodeAmount(value: string | number | undefined | null): string {
+  if (value == null || String(value).trim() === '') return ''
+  const cents = Number(value)
+  return Number.isFinite(cents) ? (cents / 100).toFixed(2) : ''
+}
+
 /** 通行介质 — 对齐 PassCodeUtil::GetMediaTypeStr */
 export function getMediaTypeStr(mediaType: number | string | undefined | null): string {
   const n = Number(mediaType)

@@ -32,6 +32,7 @@ import {
 } from './utils/detailDisplay'
 import {
   formatVehicleSizeDisplay,
+  formatPasscodeAmount,
   getMediaTypeStr,
   getTransPayTypeStr,
   getVehicleSignStr,
@@ -715,7 +716,7 @@ onMounted(async () => {
               <div class="field-row"><label>入口站名称</label><input readonly :value="enStationName" /></div>
               <div class="field-row"><label>出口站名称</label><input readonly :value="exStationName" /></div>
               <div class="field-row"><label>出口交易时间</label><input readonly :value="record.pass_code_ex_time || ''" /></div>
-              <div class="field-row"><label>总交易金额(元)</label><input readonly :value="record.pass_code_fee || ''" /></div>
+              <div class="field-row"><label>总交易金额(元)</label><input readonly :value="formatPasscodeAmount(record.pass_code_fee)" /></div>
               <div class="field-row"><label>通行介质</label><input readonly :value="getMediaTypeStr(record.pass_code_media_type_id)" /></div>
               <div class="field-row"><label>通过省份个数</label><input readonly :value="record.pass_code_province_count || ''" /></div>
               <div class="field-row"><label>出口交易编号</label><input readonly :value="record.pass_code_transaction_id || ''" /></div>
@@ -762,8 +763,8 @@ onMounted(async () => {
               </div>
               <div class="field-row"><label>入口称重(KG)</label><input readonly :value="record.pass_code_en_weight || ''" /></div>
               <div class="field-row"><label>出口称重(KG)</label><input readonly :value="record.pass_code_ex_weight || ''" /></div>
-              <div class="field-row"><label>应收金额(元)</label><input readonly :value="record.pass_code_pay_fee || ''" /></div>
-              <div class="field-row"><label>交易支付方式</label><input readonly :value="getTransPayTypeStr(record.pass_code_trans_pay_type)" /></div>
+              <div class="field-row"><label>应收金额(元)</label><input readonly :value="formatPasscodeAmount(record.pass_code_pay_fee)" /></div>
+              <div class="field-row"><label>交易支付方式</label><input readonly :value="getTransPayTypeStr(record.pass_code_trans_pay_type)" :title="`支付方式代码：${record.pass_code_trans_pay_type ?? ''}`" /></div>
               <div class="field-row"><label>车辆状态标识</label><input readonly :value="getVehicleSignStr(record.pass_code_vehicle_sign)" /></div>
               <div class="field-row">
                 <label class="label-required"><span class="req-star">*</span>备注内容</label>

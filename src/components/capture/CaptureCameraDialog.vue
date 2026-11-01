@@ -494,8 +494,8 @@ function openPreview() {
 </script>
 
 <template>
-  <!-- 必须 Teleport 到 body：父级 ScreenScaler 有 CSS transform，海康原生插件嵌在其中会卡死页面 -->
-  <Teleport to="body">
+  <!-- Pad 使用网页原生摄像头，弹窗与主界面在同一缩放画布内。 -->
+  <Teleport to="#app-overlay-root">
   <div class="cap-overlay" @click.self="onClose">
     <div
       class="cap-dialog"

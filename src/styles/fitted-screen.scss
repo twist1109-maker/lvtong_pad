@@ -1,0 +1,40 @@
+/* 控件等比缩放，面板铺满可用画布。提高优先级，覆盖路由懒加载的 scoped 视口样式。 */
+html .screen-scaler-stage {
+  .dashboard,
+  .login-page { width: 100%; height: 100%; min-width: 0; }
+
+  #app-overlay-root { position: absolute; inset: 0; pointer-events: none; }
+  #app-overlay-root > * { pointer-events: auto; }
+
+  /* vw/vh 是物理浏览器视口，缩放层内统一使用设计画布尺寸。 */
+  [role='dialog'],
+  .dialog,
+  .gallery-dialog,
+  .qt-msgbox { max-width: 1840px; max-height: 1032px; }
+  .scan-dialog { width: 640px; }
+  .scan-video { height: 380px; }
+  .scan-frame { width: 200px; height: 200px; }
+  .camera-dialog { width: 800px; }
+  .camera-dialog video { height: 500px; }
+  .gallery-dialog { width: 1100px; height: 860px; }
+  .overlay > .dialog:has(.filter-box) { width: 1440px; height: 900px; }
+  .talk-dialog .video-wrap { max-height: 600px; }
+  .dashboard-video-iframe { width: 1920px; height: 1080px; }
+
+  /* 在设计尺寸内保持表单两组字段并排、采集入口完整展示。 */
+  .panel-form .form-row {
+    grid-template-columns: 94px minmax(0, 1fr) 24px 94px minmax(0, 1fr) 24px;
+    min-width: 0;
+  }
+  .panel-form :is(.field-input, .field-value, .field-input-wrap) { min-width: 0; }
+  .panel-form .form-body { overflow: visible; }
+  .capture-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .capture-btn { width: 100%; }
+  .app-header .title { min-width: 0; }
+  .login-page .brand-title { font-size: 32px; white-space: normal; }
+
+  .left-bottom { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  .left-bottom > .workflow-icons { grid-area: 1 / 1; z-index: 1; height: 100%; min-height: 0; padding: 0; flex: none; }
+  .left-bottom > .truck-scene { grid-area: 1 / 1; height: auto; min-height: 0; flex: none; align-self: stretch; }
+  .left-bottom > .hardware-bar { grid-row: 2; }
+}

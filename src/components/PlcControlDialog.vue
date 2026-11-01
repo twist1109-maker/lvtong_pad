@@ -198,9 +198,12 @@ const dialogStyle = computed(() => {
   const top = props.anchor?.top ?? 72
   const w = 176
   // 仅限制最大高度，避免矮屏溢出；实际高度由内容决定
-  const maxH = Math.min(460, Math.max(120, window.innerHeight - 16))
-  const maxLeft = Math.max(0, window.innerWidth - w - 4)
-  const maxTop = Math.max(0, window.innerHeight - 80)
+  const canvas = document.querySelector('.screen-scaler-stage') as HTMLElement | null
+  const canvasWidth = canvas?.offsetWidth ?? window.innerWidth
+  const canvasHeight = canvas?.offsetHeight ?? window.innerHeight
+  const maxH = Math.min(460, Math.max(120, canvasHeight - 16))
+  const maxLeft = Math.max(0, canvasWidth - w - 4)
+  const maxTop = Math.max(0, canvasHeight - 80)
   return {
     left: `${Math.min(Math.max(0, left), maxLeft)}px`,
     top: `${Math.min(Math.max(0, top), maxTop)}px`,

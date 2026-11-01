@@ -37,6 +37,7 @@ import CaptureCameraDialog from '@/components/capture/CaptureCameraDialog.vue'
 import type { CaptureKind } from '@/components/capture/CaptureCameraDialog.vue'
 import DrivingLicenseDialog from '@/components/capture/DrivingLicenseDialog.vue'
 import PasscodeScanDialog from '@/modules/padCapture/PasscodeScanDialog.vue'
+import type { PasscodeInfo } from '@/modules/padCapture/passcode'
 import { useBookingStore } from '@/modules/booking'
 import type {
   BookingAcceptPayload,
@@ -55,22 +56,11 @@ const bookingStore = useBookingStore()
 const router = useRouter()
 
 const showHistory = ref(false)
-/** 通行码：下拉选相机 / 高拍仪；相机打开扫码弹窗 */
-const showPasscodeMenu = ref(false)
+/** 通行码先选择摄像头或键盘式扫码仪。 */
 const showPasscodeScan = ref(false)
 
-function togglePasscodeMenu() {
-  showPasscodeMenu.value = !showPasscodeMenu.value
-}
-
-function onPasscodeCamera() {
-  showPasscodeMenu.value = false
+function onPasscodeScan() {
   showPasscodeScan.value = true
-}
-
-function onPasscodeGaopai() {
-  showPasscodeMenu.value = false
-  // 高拍仪扫码后续接入，暂时无操作
 }
 /** 从查验次数打开历史时的预填条件 */
 const historyPreset = ref<{
@@ -241,9 +231,6 @@ function onXrayDocClick(ev: MouseEvent) {
   const t = ev.target as HTMLElement | null
   if (t?.closest('.xray-dropdown')) return
   xrayOpenMenu.value = null
-  if (!t?.closest('.passcode-scan-wrap')) {
-    showPasscodeMenu.value = false
-  }
 }
 
 async function applyXrayProcess() {
@@ -759,6 +746,8 @@ async function applyPlateHistory(plate: string) {
     const res = await request<PlateHistoryData>(
       `/inspection/plate/${encodeURIComponent(p)}`,
     )
+    // 请求期间可能已重新扫码／重置，旧车的历史不能回填到新车。
+    if (form.value.plate.trim() !== p) return
     if (res.code !== 0 || !res.data) {
       form.value.historyCount = '--'
       plateHistoryRange.value = null
@@ -1400,25 +1389,21 @@ const aiSilentBusyHint = computed(() => {
 })
 
 /** 通行码 14 字段（对齐 Qt PassCodeUtil::GetPassCodeInfoByCodeStr） */
-const passcode = ref<{
-  valid: boolean
-  vehicleId: string
-  vehicleDisplayId: string
-  vehicleColorName: string
-  enStationId: string
-  exStationId: string
-  enWeight: string
-  exWeight: string
-  mediaTypeId: number
-  transactionId: string
-  passId: string
-  exTime: string
-  transPayTypeId: number
-  fee: string
-  payFee: string
-  vehicleSignId: number
-  provinceCount: string
-} | null>(null)
+const passcode = ref<PasscodeInfo | null>(null)
+
+/** Pad 本地识别与 PC／手机消息走同一回填入口，不依赖 WebSocket 才显示结果。 */
+function applyPasscode(pc: PasscodeInfo, image = '') {
+  if (!pc?.valid) return
+  const previous = passcode.value
+  const duplicate = previous?.vehicleId === pc.vehicleId && previous?.passId === pc.passId && previous?.exTime === pc.exTime
+  passcode.value = pc
+  if (image) captureThumbs.value.passcode = image
+  if (pc.vehicleDisplayId) form.value.plate = pc.vehicleDisplayId
+  if (pc.vehicleColorName) form.value.plateColor = pc.vehicleColorName
+  if (pc.exWeight != null && String(pc.exWeight).trim() !== '') form.value.weight = String(pc.exWeight).trim()
+  // 本地回填后后台会再次推送相同通行码，避免重复查询历史。
+  if (!duplicate && pc.vehicleDisplayId) void applyPlateHistory(pc.vehicleDisplayId)
+}
 
 /** 把任意图片引用转成可显示的 URL（前端 <img> 用）。
  *  对齐后端 /api/images/<rel> 静态路由；同时兼容旧的绝对路径与 /api/image?path= 形态。
@@ -1796,14 +1781,14 @@ function buildSubmitPreview(): InspectionDetail {
     pass_code_en_weight: pc?.enWeight,
     // 与主页「出口称重」一致：优先 form，回退通行码
     pass_code_ex_weight: exitWeight || pc?.exWeight,
-    pass_code_media_type_id: pc != null ? String(pc.mediaTypeId || '') : undefined,
+    pass_code_media_type_id: pc != null ? String(pc.mediaTypeId ?? '') : undefined,
     pass_code_transaction_id: pc?.transactionId,
     pass_code_pass_id: pc?.passId,
     pass_code_ex_time: pc?.exTime,
-    pass_code_trans_pay_type: pc != null ? String(pc.transPayTypeId || '') : undefined,
+    pass_code_trans_pay_type: pc != null ? String(pc.transPayTypeId ?? '') : undefined,
     pass_code_fee: pc?.fee,
     pass_code_pay_fee: pc?.payFee,
-    pass_code_vehicle_sign: pc?.vehicleSignId
+    pass_code_vehicle_sign: pc?.vehicleSignId != null
       ? `0x${pc.vehicleSignId.toString(16).toUpperCase()}`
       : undefined,
     pass_code_province_count: pc?.provinceCount,
@@ -1942,14 +1927,14 @@ async function onSubmitConfirmYes(payload?: {
     body.passcode_ex_station_id = pc.exStationId
     body.passcode_en_weight = pc.enWeight
     body.passcode_ex_weight = pc.exWeight
-    body.passcode_media_type = String(pc.mediaTypeId || '')
+    body.passcode_media_type = String(pc.mediaTypeId ?? '')
     body.passcode_transaction_id = pc.transactionId
     body.passcode_pass_id = pc.passId
     body.passcode_ex_time = pc.exTime
-    body.passcode_trans_pay_type = String(pc.transPayTypeId || '')
+    body.passcode_trans_pay_type = String(pc.transPayTypeId ?? '')
     body.passcode_fee = pc.fee
     body.passcode_pay_fee = pc.payFee
-    body.passcode_vehicle_sign = pc.vehicleSignId ? `0x${pc.vehicleSignId.toString(16).toUpperCase()}` : ''
+    body.passcode_vehicle_sign = pc.vehicleSignId != null ? `0x${pc.vehicleSignId.toString(16).toUpperCase()}` : ''
     body.passcode_province_count = pc.provinceCount
   }
 
@@ -2347,16 +2332,7 @@ function setupWS() {
   wsStore.subscribe('mobile_passcode', (msg) => {
     const pc = msg.data as typeof passcode.value
     if (!pc || !pc.valid) return
-    passcode.value = pc
-    // 对齐 Qt dispVhicleLicQRInfoToMainUI：自动填车牌 + 颜色 + 出口称重
-    if (pc.vehicleDisplayId) form.value.plate = pc.vehicleDisplayId
-    if (pc.vehicleColorName) form.value.plateColor = pc.vehicleColorName
-    // 原先只写了 passcode ref，主页 form.weight 未赋值 → 提交页有值、主页空白
-    if (pc.exWeight != null && String(pc.exWeight).trim() !== '') {
-      form.value.weight = String(pc.exWeight).trim()
-    }
-    // 车牌赋值后查历史回填 + 查验次数
-    if (pc.vehicleDisplayId) void applyPlateHistory(pc.vehicleDisplayId)
+    applyPasscode(pc)
     console.info(
       `[mobile_passcode] vehicle=${pc.vehicleDisplayId} color=${pc.vehicleColorName} ` +
       `enSta=${pc.enStationId} exSta=${pc.exStationId} exWeight=${pc.exWeight} fee=${pc.fee}`,
@@ -2506,6 +2482,7 @@ const anyDialogOpen = computed(
     showCarSize.value ||
     captureDialog.value !== null ||
     showLicenseDialog.value ||
+    showPasscodeScan.value ||
     showStopConfirmBox.value ||
     showStopResetBox.value ||
     stopErrorVisible.value ||
@@ -2766,18 +2743,10 @@ const anyDialogOpen = computed(
                 type="button"
                 class="header-icon-btn"
                 title="通行码"
-                @click.stop="togglePasscodeMenu"
+                @click.stop="onPasscodeScan"
               >
                 <img src="/assets/img/ze-scan.png" alt="" />
               </button>
-              <div v-if="showPasscodeMenu" class="passcode-scan-menu" @click.stop>
-                <button type="button" class="passcode-scan-item" @click="onPasscodeCamera">
-                  相机
-                </button>
-                <button type="button" class="passcode-scan-item" @click="onPasscodeGaopai">
-                  高拍仪
-                </button>
-              </div>
             </div>
           </div>
 
@@ -2877,6 +2846,7 @@ const anyDialogOpen = computed(
 
     <PasscodeScanDialog
       v-if="showPasscodeScan"
+      @decoded="applyPasscode"
       @close="showPasscodeScan = false"
     />
 
@@ -3062,8 +3032,8 @@ const anyDialogOpen = computed(
 .dashboard {
   display: flex;
   flex-direction: column;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   min-width: $min-app-width;
   background: #f0f0f0;
   overflow: hidden;
@@ -3527,38 +3497,6 @@ const anyDialogOpen = computed(
   display: flex;
   align-items: center;
   flex-shrink: 0;
-}
-
-.passcode-scan-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  min-width: 112px;
-  z-index: 300;
-  padding: 4px 0;
-  background: #fff;
-  border: 1px solid $border-color;
-  border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
-}
-
-.passcode-scan-item {
-  display: block;
-  width: 100%;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  color: $text-dark;
-  text-align: center;
-  white-space: nowrap;
-
-  &:hover {
-    background: #e8f6f0;
-    color: $accept-green;
-  }
 }
 
 .form-body {

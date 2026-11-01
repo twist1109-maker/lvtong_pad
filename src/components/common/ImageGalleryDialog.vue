@@ -134,7 +134,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="#app-overlay-root">
     <div class="gallery-overlay" @click.self="emit('close')">
       <div class="gallery-dialog" role="dialog" aria-modal="true" @click.stop>
         <div class="gallery-titlebar">

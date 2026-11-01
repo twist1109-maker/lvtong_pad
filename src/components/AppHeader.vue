@@ -77,6 +77,17 @@ onUnmounted(() => {
 function rectFromEl(el: EventTarget | null): ToolAnchor | undefined {
   if (!(el instanceof HTMLElement)) return undefined
   const r = el.getBoundingClientRect()
+  const stage = el.closest('.screen-scaler-stage') as HTMLElement | null
+  if (stage) {
+    const bounds = stage.getBoundingClientRect()
+    const scale = bounds.width / stage.offsetWidth
+    return {
+      left: (r.left - bounds.left) / scale,
+      top: (r.top - bounds.top) / scale,
+      right: (r.right - bounds.left) / scale,
+      bottom: (r.bottom - bounds.top) / scale,
+    }
+  }
   return { left: r.left, top: r.top, bottom: r.bottom, right: r.right }
 }
 

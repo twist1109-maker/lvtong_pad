@@ -32,7 +32,11 @@ export function useDeviceCamera(videoRef: Ref<HTMLVideoElement | null>) {
       }
       const acquired = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: 'environment' } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
       })
       if (request !== generation) {
         acquired.getTracks().forEach((track) => track.stop())
