@@ -21,6 +21,7 @@ import {
   type XrayMachinePhase,
 } from '@/utils/plcXrayStatus'
 import BookingDialog from '@/modules/booking/BookingDialog.vue'
+import SafeCameraDialog from '@/components/SafeCameraDialog.vue'
 import AgriculturalSelect from '@/components/AgriculturalSelect.vue'
 import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
 import CarSizeDialog from '@/components/CarSizeDialog.vue'
@@ -56,6 +57,8 @@ const bookingStore = useBookingStore()
 const router = useRouter()
 
 const showHistory = ref(false)
+/** 左下第四个“拍照”流程图标：周界相机 A 纯视频。 */
+const showSafeCameraDialog = ref(false)
 /** 通行码先选择摄像头或键盘式扫码仪。 */
 const showPasscodeScan = ref(false)
 
@@ -1493,6 +1496,8 @@ function onWorkflowClick(key: WorkflowStepKey) {
     void openBookingDialog({ recordPress: true })
   } else if (key === 'gate') {
     void onGateIconClick()
+  } else if (key === 'camera') {
+    showSafeCameraDialog.value = true
   }
 }
 
@@ -2473,6 +2478,7 @@ onUnmounted(() => {
 const anyDialogOpen = computed(
   () =>
     showBooking.value ||
+    showSafeCameraDialog.value ||
     showHistory.value ||
     showPlcControl.value ||
     showAiStatus.value ||
@@ -2856,6 +2862,12 @@ const anyDialogOpen = computed(
       @close="bookingStore.closeDialog()"
       @accept="onBookingAccept"
       @reject="onBookingReject"
+    />
+
+    <!-- 左下“拍照”：周界相机 A，只显示视频，不启用对讲。 -->
+    <SafeCameraDialog
+      v-if="showSafeCameraDialog"
+      @close="showSafeCameraDialog = false"
     />
 
 <!-- 农产品选择弹窗 -->

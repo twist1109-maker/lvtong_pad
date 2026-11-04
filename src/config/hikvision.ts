@@ -3,9 +3,11 @@
  * 设备 IP/账号/密码由 GET /api/device/<id>/preview-config 从 devices 表读取。
  *
  * 现场三台（device_id → IP）：
- * - cam_booking：预约机 192.168.88.101 — 画面 WebRTC/WHEP（cam4）；对讲仍可能用插件
- * - cam_lane：车道枪机 192.168.88.103 — 车顶/车头/车尾 + 主页实时视频（WebRTC/WHEP）
- * - cam_ptz：球机 192.168.88.104 — 画面由 MediaMTX 转为 WHEP（cam5）
+ * - cam_booking：预约机 192.168.188.101 — 画面 WebRTC/WHEP（cam4）
+ * - cam_head：车头相机 192.168.188.102 — 主页实时视频 + 车头采集（cam2）
+ * - cam_lane：车道枪机 192.168.188.103 — 车尾采集（cam1）
+ * - cam_road：车顶相机 192.168.188.107 — 车顶采集（cam6）
+ * - cam_ptz：球机 192.168.188.104 — 画面由 MediaMTX 转为 WHEP（cam5）
  */
 
 /** 与官方包实际落盘路径一致（整包放在 public/hikvision/codebase 下） */
@@ -20,8 +22,8 @@ export const HIK_SDK_PATHS = {
 
 /** Tab 显示名 → devices.device_id */
 export const CAMERA_DEVICE_ID: Record<string, string> = {
-  车顶相机: 'cam_lane',
-  车头相机: 'cam_lane',
+  车顶相机: 'cam_road',
+  车头相机: 'cam_head',
   车尾相机: 'cam_lane',
   预约相机: 'cam_booking',
   球机: 'cam_ptz',
@@ -40,7 +42,9 @@ export const HIK_CAPTURE_DEVICE_IDS = [] as const
 
 /**
  * 图像采集走 WebRTC 的 Tab：
- * - 车顶/车头/车尾 → /mtx/cam1/whep（车道枪机）
+ * - 车顶 → /mtx/cam6/whep（cam_road）
+ * - 车头 → /mtx/cam2/whep（cam_head）
+ * - 车尾 → /mtx/cam1/whep（cam_lane）
  * - 预约相机 → /mtx/cam4/whep（预约机）
  * - 球机 → /mtx/cam5/whep
  */

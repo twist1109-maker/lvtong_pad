@@ -4,10 +4,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 
 const defaultCertFile = fileURLToPath(
-  new URL('../gcms_src/flask_backend/certs/cert.pem', import.meta.url),
+  new URL('../lvtong-backend/certs/cert.pem', import.meta.url),
 )
 const defaultKeyFile = fileURLToPath(
-  new URL('../gcms_src/flask_backend/certs/key.pem', import.meta.url),
+  new URL('../lvtong-backend/certs/key.pem', import.meta.url),
 )
 
 const certFile = process.env.HTTPS_CERT_FILE || defaultCertFile
