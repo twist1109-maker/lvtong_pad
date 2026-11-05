@@ -2,12 +2,12 @@
  * 海康预览前端常量（不含设备凭证）
  * 设备 IP/账号/密码由 GET /api/device/<id>/preview-config 从 devices 表读取。
  *
- * 现场三台（device_id → IP）：
+ * 现场相机（device_id → IP）：
  * - cam_booking：预约机 192.168.188.101 — 画面 WebRTC/WHEP（cam4）
- * - cam_head：车头相机 192.168.188.102 — 主页实时视频 + 车头采集（cam2）
+ * - cam_head：车头相机 192.168.188.102 — 车头采集（cam2）
  * - cam_lane：车道枪机 192.168.188.103 — 车尾采集（cam1）
  * - cam_road：车顶相机 192.168.188.107 — 车顶采集（cam6）
- * - cam_ptz：球机 192.168.188.104 — 画面由 MediaMTX 转为 WHEP（cam5）
+ * - cam_ptz：球机 192.168.188.104 — 主页实时视频（cam5）
  */
 
 /** 与官方包实际落盘路径一致（整包放在 public/hikvision/codebase 下） */

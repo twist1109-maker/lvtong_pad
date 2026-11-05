@@ -1,4 +1,4 @@
-import { createApp, defineComponent, h, onMounted, ref, type Component } from 'vue'
+import { createApp, defineComponent, h, nextTick, onMounted, ref, type Component } from 'vue'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from '../../src/App.vue'
@@ -11,6 +11,7 @@ import UserManager from '../../src/components/UserManager.vue'
 import LicensePlateEdit from '../../src/components/LicensePlateEdit.vue'
 import AgriculturalSelect from '../../src/components/AgriculturalSelect.vue'
 import { useAuthStore } from '../../src/stores/useAuthStore'
+import { useBookingStore } from '../../src/modules/booking/store/useBookingStore'
 import '../../src/styles/global.scss'
 import '../../src/styles/fitted-screen.scss'
 
@@ -98,4 +99,37 @@ const app = createApp(App)
 app.use(pinia)
 app.use(router)
 useAuthStore().user = { username: 'layout-test', realName: '布局测试', phone: '', role: 1 }
+if (fixtureOptions.get('bookingBusy') === '1') {
+  void router.isReady().then(async () => {
+    await nextTick()
+    useBookingStore().isDetection = true
+    useBookingStore().checkStep = 1
+  })
+}
 app.mount('#app')
+
+// 双摄竖向拼接测试图；仅布局入口使用，不访问任何现场设备。
+if (fixtureOptions.get('bookingVideo') === '1') {
+  void router.isReady().then(async () => {
+    await nextTick()
+    const video = document.querySelector<HTMLVideoElement>('.video-panel video')
+    if (!video) return
+    const canvas = document.createElement('canvas')
+    canvas.width = 512
+    canvas.height = 1024
+    const ctx = canvas.getContext('2d')!
+    ctx.translate(0, 1024)
+    ctx.rotate(-Math.PI / 2)
+    for (const [index, color] of ['#174e67', '#246a45'].entries()) {
+      ctx.fillStyle = color
+      ctx.fillRect(index * 512, 0, 512, 512)
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 8
+      ctx.strokeRect(index * 512 + 12, 12, 488, 488)
+      ctx.fillStyle = '#fff'
+      ctx.font = '48px sans-serif'
+      ctx.fillText(`CAMERA ${index + 1} ↑`, index * 512 + 60, 270)
+    }
+    video.poster = canvas.toDataURL()
+  })
+}

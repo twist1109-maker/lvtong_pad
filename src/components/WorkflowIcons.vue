@@ -86,15 +86,13 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
         class="wf-btn"
         :class="{
           'is-book-pending': item.key === 'book' && bookingPending,
-          'is-book-disabled': item.key === 'book' && bookingActive,
         }"
         :style="{ width: cellWidthPct }"
         :title="
           item.key === 'book' && bookingActive
-            ? '检测进行中，无法预约'
+            ? '检测进行中，点击记录待处理预约'
             : item.title || item.label
         "
-        :disabled="item.key === 'book' && bookingActive"
         @click="emit('click', item.key)"
       >
         <img
@@ -183,11 +181,6 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
   &.pending {
     color: #d97706;
   }
-}
-
-.wf-btn.is-book-disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 @keyframes book-blink {

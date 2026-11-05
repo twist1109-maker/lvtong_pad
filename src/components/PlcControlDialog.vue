@@ -10,6 +10,7 @@ import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
 import { parsePlcSignalLights } from '@/utils/plcXrayStatus'
+import { parsePlcVoiceStatus, voiceStatusText, type PlcVoiceStatus } from '@/utils/plcVoiceStatus'
 
 const props = defineProps<{
   /** 对齐 Qt：btn_plccontrol 左下角全局坐标 */
@@ -19,6 +20,8 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const wsStore = useWsStore()
+const voiceStatus = ref<PlcVoiceStatus>({ front: null, back: null })
+const voiceRows = [{ key: 'front', label: '前语音' }, { key: 'back', label: '后语音' }] as const
 
 /** 确认框 */
 const confirmVisible = ref(false)
@@ -77,6 +80,7 @@ const states = ref<Record<string, boolean>>({
 })
 
 function applyStatus(d: Record<string, unknown>) {
+  voiceStatus.value = parsePlcVoiceStatus(d)
   const lights = parsePlcSignalLights(d)
   states.value.redlight = lights.red
   states.value.yellowlight = lights.yellow
@@ -274,6 +278,15 @@ const dialogStyle = computed(() => {
         </div>
       </div>
 
+      <div class="voice-feedback" aria-label="语音播报反馈" aria-live="polite">
+        <div v-for="row in voiceRows" :key="row.key" class="voice-row">
+          <span>{{ row.label }}</span>
+          <span :class="{ playing: wsStore.isConnected && voiceStatus[row.key] === true }">
+            {{ voiceStatusText(wsStore.isConnected ? voiceStatus[row.key] : null) }}
+          </span>
+        </div>
+      </div>
+
       <!-- 对齐 QMessageBox::question(this, "系统提醒", tipTxt, Yes|No) -->
       <QtMessageBox
         v-if="confirmVisible"
@@ -302,6 +315,25 @@ const dialogStyle = computed(() => {
 </template>
 
 <style scoped lang="scss">
+.voice-feedback {
+  padding: 6px 10px;
+  border-top: 1px solid #d0d0d0;
+  font-size: 12px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.voice-row {
+  display: flex;
+  justify-content: space-between;
+  line-height: 24px;
+
+  .playing {
+    color: #168449;
+    font-weight: 600;
+  }
+}
+
 .plc-overlay {
   position: fixed;
   inset: 0;
@@ -425,7 +457,8 @@ const dialogStyle = computed(() => {
 }
 
 .dialog-body {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-height: 0;
   margin: 2px 4px 4px;
   padding: 2px 6px;
   border: 1px solid #c8c8c8;

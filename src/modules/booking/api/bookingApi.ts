@@ -14,7 +14,7 @@ import { request } from '@/api/request'
 /** 默认车头宽度（米）— 对齐 config radar.headDefaultWidth */
 export const DEFAULT_HEAD_WIDTH = 1.5
 
-/** 并发 open 合并为同一请求，避免多次抢 TwoWayAudio */
+/** 并发 open 合并为同一请求，避免重复提交语音命令 */
 let sharedOpenPromise: Promise<BookingOpenResult> | null = null
 
 /** 真实 HTTP 实现 */
@@ -58,13 +58,13 @@ export function createHttpBookingApi(): BookingPort {
 
     async openDialog() {
       // 对齐 onRefreshOrderDialog：设备侧效应由后端执行
-      // 合并并发 open，防止弹窗重复挂载时多次播报/抢通道
+      // 合并并发 open，防止弹窗重复挂载时重复提交语音命令
       if (!sharedOpenPromise) {
         sharedOpenPromise = (async () => {
           try {
             const res = await request<BookingOpenResult>('/booking/open', {
               method: 'POST',
-              // open 内阻塞播报 step2，超时放宽
+              // open 提交 step2 组播，不等待设备播放结束
               timeout: 90000,
             })
             if (res.code === 0 && res.data) {

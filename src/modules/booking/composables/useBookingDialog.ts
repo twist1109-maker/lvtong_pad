@@ -199,7 +199,7 @@ export function useBookingDialog() {
   }
 
   /** 对齐 onRefreshOrderDialog。
-   * open 会阻塞等 step2；雷达图与 open 并行拉取，不堵在播报之后。
+   * open 提交 step2 组播命令；雷达图与 open 并行拉取。
    */
   async function initDialog(opts?: { fetchRadar?: boolean }) {
     xrayEnabled.value = true
@@ -217,7 +217,7 @@ export function useBookingDialog() {
     errorMessage.value = ''
     radarFetchFailed.value = false
 
-    // 雷达图立刻拉，与 /open（等 step2）并行
+    // 雷达图立刻拉，与 /open 的组播提交并行
     const radarPromise =
       opts?.fetchRadar === false
         ? Promise.resolve()
@@ -235,7 +235,7 @@ export function useBookingDialog() {
       console.warn('[BookingDialog] openDialog 失败:', e)
     }
 
-    // 不 await radar：播报结束即可开对讲；图仍在 loading 时由 canAccept 卡住受理
+    // 不等待雷达图；图仍在 loading 时由 canAccept 卡住受理
     void radarPromise
   }
 

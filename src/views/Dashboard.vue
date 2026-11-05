@@ -49,7 +49,7 @@ import { useRouter } from 'vue-router'
 import { toApiUrl, toStoragePath, joinImagePaths } from '@/utils/imagePath'
 import { processImage } from '@/utils/imageProcess'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
-import { DEFAULT_WHEP_URL } from '@/config/liveVideo'
+import { PTZ_WHEP_URL } from '@/config/liveVideo'
 import { appConfig } from '@/config/env'
 const auth = useAuthStore()
 const wsStore = useWsStore()
@@ -905,7 +905,7 @@ async function startLiveVideo() {
   const el = liveVideoRef.value
   if (!el) return
   try {
-    await playLiveVideo({ video: el, whepUrl: DEFAULT_WHEP_URL })
+    await playLiveVideo({ video: el, whepUrl: PTZ_WHEP_URL })
   } catch {
     scheduleLiveVideoRetry()
   }
@@ -1463,16 +1463,14 @@ function captureInitialImages(kind: CaptureKind): string[] {
 
 // ---- 预约 — 按键：任意时刻红灯落杆 step2；仅空闲弹窗 ----
 /** @param recordPress 操作台点「预约」需走 btn-press；现场键已记过则 false */
+let bookingPressInFlight = false
 async function openBookingDialog(opts?: { recordPress?: boolean }) {
   const detecting =
     bookingStore.isDetection || bookingStore.checkStep > 0 || workflow.value.checkStep > 0
 
   if (opts?.recordPress) {
-    // 检测中操作台不可点（WorkflowIcons disabled）；此处再挡一层
-    if (detecting) {
-      console.warn('[Booking] 检测中忽略操作台预约点击')
-      return
-    }
+    if (bookingPressInFlight) return
+    bookingPressInFlight = true
     try {
       const { getBookingApi } = await import('@/modules/booking/api/bookingApi')
       const r = await getBookingApi().recordBtnPress('ui')
@@ -1480,6 +1478,9 @@ async function openBookingDialog(opts?: { recordPress?: boolean }) {
       if (r.openDialog === false) return
     } catch (e) {
       console.warn('[Booking] 操作台预约记时失败:', e)
+      return
+    } finally {
+      bookingPressInFlight = false
     }
   }
 
@@ -2596,7 +2597,7 @@ const anyDialogOpen = computed(
         <!-- 底部：流程图标 + 车辆动画 + 硬件状态 -->
         <div class="panel-card panel-bottom">
           <BottomWorkflowPanel
-            :booking-active="workflow.bookingActive"
+            :booking-active="bookingStore.bookingActive"
             :booking-pending="bookingStore.btnPrebookPending"
             :distance="workflow.distance"
             :gate-online="gateOnline"

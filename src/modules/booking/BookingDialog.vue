@@ -78,11 +78,11 @@ async function startBookingVideo() {
   }
 }
 
-/** 后端 /booking/open 阻塞播 step2 期间 */
-const announcePlaying = ref(true)
+/** 初始化预约会话期间；不把命令提交当作设备正在播放。 */
+const sessionInitializing = ref(true)
 const talking = ref(false)
 const talkHint = computed(() =>
-  announcePlaying.value ? '播报中' : 'Pad 对讲设备暂未接入',
+  sessionInitializing.value ? '预约初始化中' : 'Pad 对讲设备暂未接入',
 )
 const canToggleTalk = computed(() => false)
 function toggleTalk() {
@@ -99,10 +99,10 @@ const videoReady = computed(() => videoStatus.value === 'playing')
 const radarReady = computed(
   () => !!radarImageUrl.value && radarImageReady.value && !loading.value,
 )
-/** 受理：视频 + 左侧图就绪（播报完成后即可，不强制对讲已开） */
+/** 受理：视频 + 左侧图就绪（初始化完成即可，不等待语音播放） */
 const canAccept = computed(
   () =>
-    !announcePlaying.value &&
+    !sessionInitializing.value &&
     videoReady.value &&
     radarReady.value &&
     !submitting.value,
@@ -110,14 +110,14 @@ const canAccept = computed(
 /** 驳回：拉图失败或非加载中即可驳回（避免雷达超时把界面卡死） */
 const canReject = computed(
   () =>
-    !announcePlaying.value &&
+    !sessionInitializing.value &&
     !submitting.value &&
     !loading.value &&
     (radarReady.value || radarFetchFailed.value),
 )
 const decideHint = computed(() => {
   if (submitting.value) return ''
-  if (announcePlaying.value) return '播报中，结束后自动开启对讲'
+  if (sessionInitializing.value) return '正在初始化预约…'
   if (loading.value) return '正在拉取雷达图（失败会自动重试），请稍候…'
   if (canAccept.value) return ''
   if (radarFetchFailed.value && !radarReady.value) {
@@ -159,7 +159,7 @@ async function handleConfirmYes() {
 }
 
 function onOverlayClick() {
-  if (submitting.value || loading.value || announcePlaying.value) return
+  if (submitting.value || loading.value || sessionInitializing.value) return
   requestConfirm('close')
 }
 
@@ -178,12 +178,12 @@ onMounted(async () => {
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   // 开窗立刻加载 WHEP 视频。
   void startBookingVideo()
-  // /open 等 step2；雷达图与之并行立刻拉取。
-  announcePlaying.value = true
+  // /open 提交 step2 组播；雷达图与之并行立刻拉取。
+  sessionInitializing.value = true
   try {
     await initDialog({ fetchRadar: true })
   } finally {
-    announcePlaying.value = false
+    sessionInitializing.value = false
   }
 })
 
@@ -241,15 +241,15 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="btn-talk"
-          :class="{ on: talking, announcing: announcePlaying }"
+          :class="{ on: talking, announcing: sessionInitializing }"
           :disabled="!canToggleTalk"
           :title="talkHint || '对讲'"
           @click="toggleTalk"
         >
-          {{ announcePlaying ? '播报中' : '对讲暂未接入' }}
+          {{ sessionInitializing ? '初始化中' : '对讲暂未接入' }}
         </button>
         <span
-          v-if="talkHint && !announcePlaying"
+          v-if="talkHint && !sessionInitializing"
           class="talk-hint"
         >
           {{ talkHint }}
@@ -380,6 +380,7 @@ onBeforeUnmount(() => {
 }
 
 .video-panel {
+  container-type: size;
   width: 512px;
   height: 256px;
   flex-shrink: 0;
@@ -396,9 +397,13 @@ onBeforeUnmount(() => {
 
 .live-webrtc {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  left: 50%;
+  top: 50%;
+  /* 双摄拼接画面整体顺时针旋转；先交换宽高，完整保留两个镜头。 */
+  width: 100cqh;
+  height: 100cqw;
+  max-width: none;
+  transform: translate(-50%, -50%) rotate(90deg);
   object-fit: contain;
   background: #1a1a1a;
   z-index: 1;
