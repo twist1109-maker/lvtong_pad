@@ -3,7 +3,7 @@
  * 雷达来车图 + 可拖分界红线 — 对齐 Qt ImageLabelWithLine
  * 面板透明无边框，对话框绿渐变透过
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps<{
   imageUrl?: string | null
@@ -20,13 +20,34 @@ const emit = defineEmits<{
 
 const dragging = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
+const stageRef = ref<HTMLElement | null>(null)
+const naturalSize = ref({ width: 0, height: 0 })
+const panelSize = ref({ width: 0, height: 0 })
+let observer: ResizeObserver | undefined
+
+// 红线坐标以实际图片区域为准；不同点云宽高比下留白不能参与米/像素换算。
+const stageStyle = computed(() => {
+  const image = naturalSize.value
+  const panel = panelSize.value
+  if (!image.width || !image.height || !panel.width || !panel.height) return {}
+  const scale = Math.min(panel.width / image.width, panel.height / image.height)
+  return { width: `${image.width * scale}px`, height: `${image.height * scale}px` }
+})
+
+onMounted(() => {
+  observer = new ResizeObserver(([entry]) => {
+    if (entry) panelSize.value = { width: entry.contentRect.width, height: entry.contentRect.height }
+  })
+  if (panelRef.value) observer.observe(panelRef.value)
+})
+onUnmounted(() => observer?.disconnect())
 
 const linePercent = computed(() => `${props.linePosition * 100}%`)
 const showLine = computed(() => props.alwaysShowLine || !!props.imageUrl)
 const maskOpacity = computed(() => (props.darkness ?? 0) / 255)
 
 function clampPosition(clientX: number) {
-  const el = panelRef.value
+  const el = stageRef.value
   if (!el) return props.linePosition
   const rect = el.getBoundingClientRect()
   if (rect.width <= 0) return props.linePosition
@@ -37,7 +58,8 @@ function onPointerDown(e: PointerEvent) {
   if (!showLine.value) return
   const el = panelRef.value
   if (!el) return
-  const rect = el.getBoundingClientRect()
+  const rect = stageRef.value?.getBoundingClientRect()
+  if (!rect || e.clientY < rect.top || e.clientY > rect.bottom) return
   const lineX = rect.width * props.linePosition
   if (Math.abs(e.clientX - rect.left - lineX) <= 10) {
     dragging.value = true
@@ -53,17 +75,22 @@ function onPointerMove(e: PointerEvent) {
 function onPointerUp(e: PointerEvent) {
   if (!dragging.value) return
   dragging.value = false
-  panelRef.value?.releasePointerCapture(e.pointerId)
+  if (panelRef.value?.hasPointerCapture(e.pointerId)) {
+    panelRef.value.releasePointerCapture(e.pointerId)
+  }
 }
 
 watch(
   () => props.imageUrl,
   () => {
     dragging.value = false
+    naturalSize.value = { width: 0, height: 0 }
   },
 )
 
-function onImageLoad() {
+function onImageLoad(event: Event) {
+  const image = event.target as HTMLImageElement
+  naturalSize.value = { width: image.naturalWidth, height: image.naturalHeight }
   emit('loaded')
 }
 
@@ -82,6 +109,7 @@ function onImageError() {
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
   >
+    <div ref="stageRef" class="radar-stage" :style="stageStyle">
     <img
       v-if="imageUrl"
       :src="imageUrl"
@@ -100,11 +128,15 @@ function onImageError() {
       />
       <div class="radar-line" :style="{ left: linePercent }" />
     </template>
+    </div>
   </div>
 </template>
 
 <style scoped lang="scss">
 .radar-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   position: relative;
   width: 512px;
   height: 256px;
@@ -124,6 +156,14 @@ function onImageError() {
   &.is-dragging {
     cursor: grabbing;
   }
+}
+
+.radar-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex-shrink: 0;
+  touch-action: none;
 }
 
 .radar-image {
