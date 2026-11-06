@@ -366,7 +366,7 @@ onBeforeUnmount(() => {
 .radar-area { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; background: #fff; }
 .radar-area :deep(.radar-panel) { width: 100%; height: 100%; }
 .settings-column { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; min-width: 0; }
-.xray-group { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 60px; padding: 0 8px; background: rgba(255, 255, 255, .8); }
+.xray-group { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 60px; padding: 0 8px; background: transparent; }
 .xray-label { font-size: 15px; font-weight: 700; white-space: nowrap; }
 .xray-label.is-on { color: #cb5a46; }
 .xray-label.is-off { color: #6b7280; }
