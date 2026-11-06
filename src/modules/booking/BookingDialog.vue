@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 预约处理 — 1:1 对齐 Qt OrderDialog.ui / OrderDialog.cpp
- * 右侧：WHEP 看画面（cam4），浏览器经后端连接预约海康实时对讲。
+ * 预约处理 — 左侧竖屏视频、中间雷达、右侧设置。
+ * 左侧竖屏预约视频，中间雷达图，右侧设置；对讲经后端连接预约海康。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -84,10 +84,10 @@ async function startBookingVideo() {
 /** 初始化预约会话期间；不把命令提交当作设备正在播放。 */
 const sessionInitializing = ref(true)
 const { talking, busy: talkBusy, hint: talkHint, error: talkError,
-  stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
+  speakerMuted, toggleSpeaker, stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
 const canToggleTalk = computed(() => !submitting.value)
 
-/** 左侧雷达图是否已在浏览器解码完成 */
+/** 雷达图是否已在浏览器解码完成 */
 const radarImageReady = ref(false)
 watch(radarImageUrl, () => {
   radarImageReady.value = false
@@ -97,7 +97,7 @@ const videoReady = computed(() => videoStatus.value === 'playing')
 const radarReady = computed(
   () => !!radarImageUrl.value && radarImageReady.value && !loading.value,
 )
-/** 受理：视频 + 左侧图就绪（初始化完成即可，不等待语音播放） */
+/** 受理：视频 + 雷达图就绪（初始化完成即可，不等待语音播放） */
 const canAccept = computed(
   () =>
     !sessionInitializing.value &&
@@ -122,7 +122,7 @@ const decideHint = computed(() => {
     return '雷达图拉取失败：可点刷新重试，或直接驳回'
   }
   const missing: string[] = []
-  if (!radarReady.value) missing.push('左侧图')
+  if (!radarReady.value) missing.push('雷达图')
   if (!videoReady.value) missing.push('视频')
   if (!missing.length) return ''
   return `请等待${missing.join('、')}加载完成后再受理`
@@ -195,472 +195,216 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="booking-overlay" @click.self="onOverlayClick">
-    <div class="booking-dialog" role="dialog" aria-modal="true" @click.stop>
-      <h2 class="dialog-title">预约处理</h2>
+    <div class="booking-dialog" role="dialog" aria-modal="true" aria-labelledby="booking-title" @click.stop>
+      <h2 id="booking-title" class="dialog-title">预约处理</h2>
 
-      <div class="preview-row">
-        <RadarImagePanel
-          v-model:line-position="linePosition"
-          :image-url="radarImageUrl"
-          :darkness="0"
-          always-show-line
-          @loaded="onRadarImageLoaded"
-          @error="onRadarImageError"
-        />
-        <div class="video-panel">
-          <video
-            ref="liveVideoRef"
-            class="live-webrtc"
-            muted
-            autoplay
-            playsinline
-          />
-          <div
-            v-if="showVideoHint"
-            class="video-status"
-            :class="{ err: videoStatus === 'error' || !!videoError }"
-          >
+      <div class="booking-main">
+        <div class="video-panel" aria-label="预约相机画面">
+          <video ref="liveVideoRef" class="live-webrtc" muted autoplay playsinline />
+          <div v-if="showVideoHint" class="video-status" :class="{ err: videoStatus === 'error' || !!videoError }">
             {{ videoHint }}
           </div>
         </div>
-      </div>
 
-      <div class="tool-row">
-        <span class="sp sp-40" />
-        <button
-          type="button"
-          class="btn-refresh"
-          title="点击刷新雷达图"
-          :disabled="loading || submitting"
-          @click="() => refreshRadarImage({ maxRetries: 2 })"
-        >
-          <img src="/assets/img/a_refresh.png" alt="刷新" />
-        </button>
-        <span class="img-info" :title="imgInfoText">{{ imgInfoText }}</span>
-        <span class="warning-text">请认真确认分界线位置，确保安全！</span>
-        <button
-          type="button"
-          class="btn-talk"
-          :class="{ on: talking, announcing: talkBusy }"
-          :disabled="!canToggleTalk"
-          :title="talkHint || '对讲'"
-          @click="toggleTalk"
-        >
-          {{ talking ? '结束对讲' : talkBusy ? '取消连接' : '开始对讲' }}
-        </button>
-        <span
-          v-if="talkHint"
-          class="talk-hint"
-          :class="{ err: !!talkError }"
-        >
-          {{ talkHint }}
-        </span>
-        <span class="sp sp-120" />
-        <button type="button" class="btn-hidden" hidden aria-hidden="true" />
-        <span class="sp sp-220" />
-      </div>
-
-      <p v-if="errorMessage" class="error-tip">{{ errorMessage }}</p>
-      <p v-else-if="decideHint" class="decide-hint">{{ decideHint }}</p>
-
-      <div class="bottom-row">
-        <span class="sp sp-80" />
-        <span class="label-vehicle">车型：</span>
-        <button
-          type="button"
-          class="btn-vehicle"
-          :title="vehicleTypeTip"
-          :disabled="submitting"
-          @click="toggleVehicleType"
-        >
-          <img :src="vehicleTypeIcon" :alt="vehicleTypeTip" />
-        </button>
-        <span class="sp sp-100" />
-
-        <div class="xray-group">
-          <span class="xray-label" :class="xrayLabelClass">{{ xrayLabel }}</span>
-          <img :src="xrayIcon" class="xray-status-icon" alt="" />
-          <SlipToggle v-model="xrayEnabled" />
+        <div class="radar-area">
+          <RadarImagePanel
+            v-model:line-position="linePosition"
+            :image-url="radarImageUrl"
+            :darkness="0"
+            always-show-line
+            @loaded="onRadarImageLoaded"
+            @error="onRadarImageError"
+          />
         </div>
 
-        <span class="flex-2" />
+        <aside class="settings-column" aria-label="预约设置">
+          <div class="xray-group">
+            <span class="xray-label" :class="xrayLabelClass">{{ xrayLabel }}</span>
+            <img :src="xrayIcon" class="xray-status-icon" alt="" />
+            <SlipToggle v-model="xrayEnabled" />
+          </div>
+          <div class="vehicle-group">
+            <span class="label-vehicle">车型：</span>
+            <button type="button" class="btn-vehicle" :title="vehicleTypeTip" :disabled="submitting" @click="toggleVehicleType">
+              <img :src="vehicleTypeIcon" :alt="vehicleTypeTip" />
+            </button>
+          </div>
+        </aside>
 
-        <button
-          type="button"
-          class="btn-reject"
-          :disabled="!canReject"
-          :title="canReject ? '驳回' : decideHint || '驳回'"
-          @click="onRejectClick"
-        >
-          <img src="/assets/img/a_dismiss.png" alt="" />
-          驳 回
-        </button>
-        <span class="flex-2" />
-        <button
-          type="button"
-          class="btn-accept"
-          :disabled="!canAccept"
-          :title="canAccept ? '受理' : decideHint || '受理'"
-          @click="onAcceptClick"
-        >
-          <img src="/assets/img/a_accept.png" alt="" />
-          受 理
-        </button>
-        <span class="sp sp-100" />
+        <div class="radar-meta">
+          <div class="radar-toolbar">
+            <div class="measurement-info">
+              <button type="button" class="btn-refresh" title="点击刷新雷达图" :disabled="loading || submitting" @click="() => refreshRadarImage({ maxRetries: 2 })">
+                <img src="/assets/img/a_refresh.png" alt="刷新" />
+              </button>
+              <span class="img-info" :title="imgInfoText">{{ imgInfoText }}</span>
+            </div>
+            <span class="warning-text">请认真确认分界线位置，确保安全！</span>
+          </div>
+          <p v-if="errorMessage" class="error-tip" role="status">{{ errorMessage }}</p>
+          <p v-else-if="decideHint" class="decide-hint" role="status">{{ decideHint }}</p>
+        </div>
+
+        <div class="booking-actions">
+          <div class="voice-controls">
+            <div class="voice-buttons">
+              <button
+                type="button" class="btn-talk"
+                :class="{ on: talking, connecting: talkBusy }"
+                :disabled="!canToggleTalk"
+                :title="talkHint || '开始对讲'"
+                :aria-pressed="talking"
+                @click="toggleTalk"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
+                </svg>
+                <span>{{ talking ? '结束对讲' : talkBusy ? '取消连接' : '开始对讲' }}</span>
+              </button>
+              <button
+                type="button" class="btn-speaker" :class="{ muted: speakerMuted }"
+                :disabled="!talking" :aria-pressed="speakerMuted"
+                :title="speakerMuted ? '恢复接收声音' : '静音接收声音'"
+                :aria-label="speakerMuted ? '恢复接收声音' : '静音接收声音'"
+                @click="toggleSpeaker"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                  <path d="M11 4 6 8H3v8h3l5 4V4Z" stroke-linejoin="round" />
+                  <path v-if="!speakerMuted" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
+                  <path v-else d="m16 9 6 6m0-6-6 6" />
+                </svg>
+              </button>
+            </div>
+            <p v-if="talkHint" class="talk-hint" :class="{ err: !!talkError }" role="status">{{ talkHint }}</p>
+          </div>
+          <button type="button" class="btn-reject" :disabled="!canReject" :title="canReject ? '驳回' : decideHint || '驳回'" @click="onRejectClick">
+            <img src="/assets/img/a_dismiss.png" alt="" />驳 回
+          </button>
+          <button type="button" class="btn-accept" :disabled="!canAccept" :title="canAccept ? '受理' : decideHint || '受理'" @click="onAcceptClick">
+            <img src="/assets/img/a_accept.png" alt="" />受 理
+          </button>
+        </div>
       </div>
     </div>
 
-    <ConfirmDialog
-      v-if="confirmVisible && pendingConfirm"
-      :title="pendingConfirm.title"
-      :message="pendingConfirm.message"
-      @confirm="handleConfirmYes"
-      @cancel="cancelConfirm"
-    />
-
+    <ConfirmDialog v-if="confirmVisible && pendingConfirm" :title="pendingConfirm.title" :message="pendingConfirm.message" @confirm="handleConfirmYes" @cancel="cancelConfirm" />
   </div>
 </template>
 
 <style scoped lang="scss">
-@use '@/styles/variables.scss' as *;
-
 .booking-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
+  background: rgba(0, 0, 0, .45);
   z-index: 1000;
 }
-
 .booking-dialog {
-  width: 1289px;
-  height: 560px;
+  width: 1280px;
+  height: 660px;
   max-width: 98vw;
   max-height: 96vh;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  padding: 0;
-  background: linear-gradient(
-    180deg,
-    #5fbb9e 0%,
-    #f0f9f5 12%,
-    #ffffff 100%
-  );
-  border: 1px solid #5fbb9e;
+  padding: 34px 48px 38px;
+  background: linear-gradient(180deg, #83bfaf 0%, #eff7f4 18%, #fbfdfc 65%, #fff 100%);
+  border: 1px solid #80b6a7;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .18);
   font-family: 'Microsoft YaHei', '新宋体', sans-serif;
   overflow: hidden;
 }
-
 .dialog-title {
   flex: 0 0 auto;
-  min-height: 60px;
-  max-height: 66px;
-  margin: 8px;
-  padding: 10px;
-  font-size: 24px;
+  margin: 0 0 28px;
+  font-size: 28px;
+  line-height: 40px;
   font-weight: 700;
-  color: #2c3e50;
-  text-align: center;
-  background: transparent;
-  border: none;
-  box-sizing: border-box;
+  color: #29454b;
+  text-align: left;
 }
-
-.preview-row {
-  display: flex;
-  justify-content: center;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  margin: 0;
-  flex-shrink: 0;
-  background: transparent;
+.booking-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr) 224px;
+  grid-template-rows: 304px minmax(66px, 1fr) 64px;
+  column-gap: 32px;
+  row-gap: 16px;
 }
-
 .video-panel {
+  grid-column: 1;
+  grid-row: 1 / 4;
   container-type: size;
-  width: 512px;
-  height: 256px;
-  flex-shrink: 0;
-  background: #1a1a1a;
-  border: none;
-  outline: none;
-  box-shadow: none;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 8px solid #f3f9f6;
+  background: #181c1b;
   overflow: hidden;
-  position: relative;
 }
-
 .live-webrtc {
   position: absolute;
   left: 50%;
   top: 50%;
-  /* 双摄拼接画面整体顺时针旋转；先交换宽高，完整保留两个镜头。 */
+  /* 竖向容器，双摄整体顺时针90°，完整保留画面。 */
   width: 100cqh;
   height: 100cqw;
   max-width: none;
   transform: translate(-50%, -50%) rotate(90deg);
   object-fit: contain;
-  background: #1a1a1a;
-  z-index: 1;
+  background: #181c1b;
 }
-
-.video-status {
-  position: relative;
-  z-index: 3;
-  color: #999;
-  font-size: 16px;
-  user-select: none;
-  pointer-events: none;
-
-  &.err {
-    color: #c0392b;
-  }
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 0;
-  margin: 28px 0 0;
-  min-height: 32px;
-}
-
-.btn-talk {
-  flex-shrink: 0;
-  margin-left: 8px;
-  min-width: 72px;
-  padding: 4px 10px;
-  border: none;
-  border-radius: 4px;
-  background: #059669;
-  color: #ddd;
-  font-size: 13px;
-  font-weight: 700;
-  font-family: inherit;
-  cursor: pointer;
-
-  &.on {
-    background: #d97706;
-  }
-
-  &.announcing {
-    background: #6b7280;
-    color: #f3f4f6;
-  }
-
-  &:hover:not(:disabled) {
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-}
-
-.talk-hint {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 12px;
-  color: #059669;
-  white-space: nowrap;
-
-  &.err {
-    color: #c0392b;
-  }
-}
-
-.bottom-row {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 9px 0;
-  margin-top: auto;
-}
-
-.sp {
-  flex-shrink: 0;
-  display: block;
-}
-.sp-40 {
-  width: 40px;
-}
-.sp-80 {
-  width: 80px;
-}
-.sp-100 {
-  width: 100px;
-}
-.sp-120 {
-  width: 120px;
-}
-.sp-220 {
-  width: 220px;
-}
-
-.flex-2 {
-  flex: 2;
-  min-width: 40px;
-}
-
-.btn-refresh {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: #1677ff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-
-  img {
-    width: 28px;
-    height: 28px;
-  }
-
-  &:hover:not(:disabled) {
-    background: #40feff;
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: wait;
-  }
-}
-
-.img-info {
-  flex: 3;
-  min-width: 200px;
-  font-size: 14.95px;
-  color: #666;
-  word-break: break-word;
-  padding: 0 4px;
-}
-
-.warning-text {
-  flex: 3;
-  font-size: 14px;
-  font-weight: 900;
-  color: #000;
-  font-family: 'Microsoft YaHei', sans-serif;
-  white-space: nowrap;
-  text-align: left;
-}
-
-.error-tip {
-  margin: 0 24px;
-  font-size: 12px;
-  color: #c0392b;
-}
-
-.decide-hint {
-  margin: 0 24px;
-  font-size: 12px;
-  color: #b45309;
-}
-
-.label-vehicle {
-  font-size: 14px;
-  color: #2c3e50;
-  white-space: nowrap;
-}
-
-.btn-vehicle {
-  width: 96px;
-  height: 60px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  flex-shrink: 0;
-
-  img {
-    width: 96px;
-    height: 60px;
-    object-fit: contain;
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-}
-
-.xray-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.xray-label {
-  max-width: 45px;
-  font-size: 10px;
-  font-weight: 700;
-  white-space: nowrap;
-
-  &.is-on {
-    color: #f00;
-  }
-
-  &.is-off {
-    color: #999;
-  }
-}
-
-.xray-status-icon {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-}
-
-.btn-reject,
-.btn-accept {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  max-width: 100px;
-  padding: 4px 8px;
-  border: none;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 700;
-  font-family: 'Microsoft YaHei', sans-serif;
-  color: #ddd;
-  cursor: pointer;
-  flex-shrink: 0;
-
-  img {
-    width: 20px;
-    height: 20px;
-  }
-
-  &:hover:not(:disabled) {
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-}
-
-.btn-reject {
-  background: #ef4444;
-}
-
-.btn-accept {
-  background: #059669;
+.video-status { position: relative; padding: 12px; text-align: center; color: #d1d5db; font-size: 14px; pointer-events: none; }
+.video-status.err { color: #f5a29d; }
+.radar-area { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; background: #fff; }
+.radar-area :deep(.radar-panel) { width: 100%; height: 100%; }
+.settings-column { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; min-width: 0; }
+.xray-group { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 60px; padding: 0 8px; background: rgba(255, 255, 255, .8); }
+.xray-label { font-size: 15px; font-weight: 700; white-space: nowrap; }
+.xray-label.is-on { color: #cb5a46; }
+.xray-label.is-off { color: #6b7280; }
+.xray-status-icon { width: 28px; height: 28px; object-fit: contain; }
+.vehicle-group { display: flex; align-items: flex-end; justify-content: center; gap: 10px; padding: 0 0 10px; }
+.label-vehicle { font-size: 16px; line-height: 26px; color: #222; white-space: nowrap; }
+.btn-vehicle { padding: 0; width: 144px; height: 90px; border: none; background: transparent; cursor: pointer; }
+.btn-vehicle img { width: 100%; height: 100%; object-fit: contain; }
+.radar-meta { grid-column: 2; grid-row: 2; min-width: 0; }
+.radar-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.measurement-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.btn-refresh { flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 2px; padding: 0; background: #1677ff; cursor: pointer; }
+.btn-refresh img { display: block; width: 100%; height: 100%; }
+.img-info { font-size: 14px; color: #303b38; overflow-wrap: anywhere; }
+.warning-text { font-size: 14px; line-height: 24px; font-weight: 700; color: #202724; }
+.error-tip, .decide-hint { margin: 8px 0 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.error-tip { color: #b83f32; }
+.decide-hint { color: #99621d; }
+.booking-actions { grid-column: 2 / 4; grid-row: 3; display: grid; grid-template-columns: minmax(0, 1fr) 132px minmax(0, 1fr); align-items: start; gap: 24px; min-width: 0; }
+.voice-controls { min-width: 0; }
+.voice-buttons { display: flex; align-items: center; gap: 26px; }
+.btn-talk, .btn-speaker { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border: 0; border-radius: 4px; padding: 6px; background: transparent; color: #6c817b; font: inherit; font-size: 13px; cursor: pointer; }
+.btn-talk svg, .btn-speaker svg { width: 24px; height: 24px; flex-shrink: 0; }
+.btn-talk.on { color: #15825e; background: #e4f3eb; }
+.btn-talk.connecting { color: #99621d; }
+.btn-speaker.muted { color: #b83f32; }
+.talk-hint { margin: 0; font-size: 12px; line-height: 1.4; color: #15825e; overflow-wrap: anywhere; }
+.talk-hint.err { color: #b83f32; }
+.btn-reject, .btn-accept { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 120px; min-height: 36px; margin-top: 3px; padding: 6px 12px; border: none; border-radius: 4px; color: #fff; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+.btn-reject { justify-self: center; background: #db715b; }
+.btn-accept { justify-self: end; background: #438d77; }
+.btn-reject img, .btn-accept img { width: 20px; height: 20px; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid #1677ff; outline-offset: 3px; }
+button:hover:not(:disabled) { filter: brightness(1.06); }
+/* 直接嵌入小视口时也可容纳；主系统仍由设计画布统一等比缩放。 */
+@media (max-width: 760px) {
+  .booking-dialog { padding: 22px; }
+  .booking-main { grid-template-columns: 190px minmax(0, 1fr) 180px; column-gap: 20px; }
 }
 </style>

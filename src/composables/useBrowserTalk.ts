@@ -6,6 +6,7 @@ import { appConfig } from '@/config/env'
 export function useBrowserTalk() {
   const state = ref<'idle' | 'connecting' | 'talking' | 'error'>('idle')
   const error = ref('')
+  const speakerMuted = ref(false)
   const stats = ref({ sentBytes: 0, receivedBytes: 0, droppedFrames: 0 })
   const talking = computed(() => state.value === 'talking')
   const busy = computed(() => state.value === 'connecting')
@@ -16,6 +17,7 @@ export function useBrowserTalk() {
   let mic: MediaStream | null = null
   let node: AudioWorkletNode | null = null
   let source: MediaStreamAudioSourceNode | null = null
+  let outputGain: GainNode | null = null
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let deadline: ReturnType<typeof setTimeout> | undefined
 
@@ -28,6 +30,9 @@ export function useBrowserTalk() {
     source?.disconnect()
     source = null
     if (node) { node.port.onmessage = null; node.disconnect(); node = null }
+    outputGain?.disconnect()
+    outputGain = null
+    speakerMuted.value = false
     const ac = context
     context = null
     if (ac) { ac.onstatechange = null; void ac.close().catch(() => {}) }
@@ -67,7 +72,9 @@ export function useBrowserTalk() {
       await ac.audioWorklet.addModule('/audio/talk-worklet.js')
       if (!active()) return
       node = new AudioWorkletNode(ac, 'lvtong-talk', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
-      node.connect(ac.destination)
+      outputGain = ac.createGain()
+      node.connect(outputGain)
+      outputGain.connect(ac.destination)
       source = ac.createMediaStreamSource(stream)
       source.connect(node)
       const base = appConfig.wsUrl.startsWith('/') ? window.location.origin : appConfig.wsUrl.replace(/\/socket\.io\/?$/, '')
@@ -124,8 +131,13 @@ export function useBrowserTalk() {
     }
   }
   function toggle() { if (state.value === 'talking' || state.value === 'connecting') stop(); else void start() }
+  function toggleSpeaker() {
+    if (!talking.value || !outputGain) return
+    speakerMuted.value = !speakerMuted.value
+    outputGain.gain.value = speakerMuted.value ? 0 : 1
+  }
   function pageHide() { stop() }
   window.addEventListener('pagehide', pageHide)
   onBeforeUnmount(() => { window.removeEventListener('pagehide', pageHide); stop() })
-  return { state, error, stats, talking, busy, hint, start, stop, toggle }
+  return { state, error, stats, talking, busy, hint, speakerMuted, start, stop, toggle, toggleSpeaker }
 }
