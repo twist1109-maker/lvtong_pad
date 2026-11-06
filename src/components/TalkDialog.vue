@@ -1,128 +1,27 @@
 <script setup lang="ts">
-/**
- * 可视对讲 — 对齐 Qt TalkDialog.ui / TalkDialog.cpp
- * 画面：MediaMTX WHEP cam4（预约机）；对讲：海康插件 talkOnly（对齐 BookingDialog）
- */
+/** 预约海康无插件对讲；视频与音频独立，点击后申请麦克风。 */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getHikCapturePlayer } from '@/composables/hikCaptureContext'
-import { DEFAULT_GUN_DEVICE_ID, TALK_CAMERA_DEVICE_ID } from '@/config/hikvision'
 import { TALK_WHEP_URL } from '@/config/liveVideo'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
-
-const emit = defineEmits<{
-  close: []
-}>()
-
+import { useBrowserTalk } from '@/composables/useBrowserTalk'
+const emit = defineEmits<{ close: [] }>()
 const liveVideoRef = ref<HTMLVideoElement | null>(null)
-
-const {
-  status: videoStatus,
-  error: videoError,
-  play: playVideo,
-  stop: stopVideo,
-} = useWhepPlayer()
-
+const { status: videoStatus, error: videoError, play: playVideo, stop: stopVideo } = useWhepPlayer()
+const { talking, busy: talkBusy, hint: talkHint, error: talkError, stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
 let videoRetryTimer: number | undefined
-
-const hik = getHikCapturePlayer()
-const {
-  status: talkStatus,
-  talking,
-  talkBusy,
-  setTalkOnly,
-  ensureDevice,
-  hide: hideHik,
-  hidePluginOverlay,
-  startTalk,
-  stopTalk,
-  toggleTalk,
-} = hik
-
-const videoHint = computed(() => {
-  if (videoError.value) return videoError.value
-  if (videoStatus.value === 'connecting') return '连接中…'
-  if (videoStatus.value === 'playing') return ''
-  if (videoStatus.value === 'failed' || videoStatus.value === 'disconnected') {
-    return '连接中断'
-  }
-  if (videoStatus.value === 'error') return videoError.value || '视频连接失败'
-  return '视频区域'
-})
+let disposed = false
+const videoHint = computed(() => videoError.value || (videoStatus.value === 'connecting' ? '连接中…' : '视频连接中断'))
 const showVideoHint = computed(() => videoStatus.value !== 'playing')
-
-const canToggleTalk = computed(
-  () =>
-    !talkBusy.value &&
-    (talkStatus.value === 'playing' || talking.value || videoStatus.value === 'playing'),
-)
-
 async function startTalkVideo() {
   const el = liveVideoRef.value
-  if (!el) return
-  try {
-    await playVideo({ video: el, whepUrl: TALK_WHEP_URL })
-  } catch {
-    window.clearTimeout(videoRetryTimer)
-    videoRetryTimer = window.setTimeout(() => {
-      void startTalkVideo()
-    }, 3000)
-  }
+  if (!el || disposed) return
+  try { await playVideo({ video: el, whepUrl: TALK_WHEP_URL }) }
+  catch { if (!disposed) videoRetryTimer = window.setTimeout(() => { void startTalkVideo() }, 3000) }
 }
-
-async function onClose() {
-  try {
-    stopTalk()
-  } catch {
-    /* ignore */
-  }
-  hidePluginOverlay()
-  setTalkOnly(true)
-  try {
-    await ensureDevice(DEFAULT_GUN_DEVICE_ID)
-  } catch {
-    /* ignore */
-  }
-  hideHik()
-  emit('close')
-}
-
-onMounted(async () => {
-  await nextTick()
-  await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  setTalkOnly(true)
-  hideHik()
-  void startTalkVideo()
-  try {
-    stopTalk()
-  } catch {
-    /* ignore */
-  }
-  void ensureDevice(TALK_CAMERA_DEVICE_ID)
-  void (async () => {
-    for (let i = 0; i < 80; i++) {
-      if (talkStatus.value === 'playing' || videoStatus.value === 'playing') break
-      await new Promise<void>((r) => window.setTimeout(r, 100))
-    }
-    await new Promise<void>((r) => window.setTimeout(r, 300))
-    await startTalk()
-  })()
-})
-
-onBeforeUnmount(() => {
-  window.clearTimeout(videoRetryTimer)
-  try {
-    stopTalk()
-  } catch {
-    /* ignore */
-  }
-  hidePluginOverlay()
-  setTalkOnly(true)
-  void ensureDevice(DEFAULT_GUN_DEVICE_ID)
-  hideHik()
-  void stopVideo()
-})
+function onClose() { stopTalk(); emit('close') }
+onMounted(async () => { await nextTick(); void startTalkVideo() })
+onBeforeUnmount(() => { disposed = true; window.clearTimeout(videoRetryTimer); void stopVideo() })
 </script>
-
 <template>
   <div class="talk-overlay" @click.self="onClose">
     <div class="talk-dialog" role="dialog" aria-modal="true" aria-label="可视对讲" @click.stop>
@@ -145,15 +44,16 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <p v-if="talkHint" class="talk-hint" :class="{ err: !!talkError }">{{ talkHint }}</p>
       <div class="bottom-row">
         <button
           type="button"
           class="btn-talk"
           :class="{ on: talking }"
-          :disabled="!canToggleTalk"
+          :title="talkHint || '对讲'"
           @click="toggleTalk"
         >
-          {{ talking ? '停止对讲' : '开始对讲' }}
+          {{ talking ? '结束对讲' : talkBusy ? '取消连接' : '开始对讲' }}
         </button>
         <button type="button" class="btn-close" @click="onClose">关 闭</button>
       </div>
@@ -201,6 +101,7 @@ onBeforeUnmount(() => {
 }
 
 .video-panel {
+  container-type: size;
   width: 800px;
   max-width: 100%;
   height: 450px;
@@ -213,8 +114,13 @@ onBeforeUnmount(() => {
 }
 
 .live-webrtc {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100cqh;
+  height: 100cqw;
+  max-width: none;
+  transform: translate(-50%, -50%) rotate(90deg);
   object-fit: contain;
   background: #1a1a1a;
   display: block;
@@ -244,6 +150,9 @@ onBeforeUnmount(() => {
   margin-top: 16px;
   padding-bottom: 8px;
 }
+
+.talk-hint { text-align: center; margin: 8px 0 0; color: #059669; }
+.talk-hint.err { color: #c0392b; }
 
 .btn-talk,
 .btn-close {

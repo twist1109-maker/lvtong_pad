@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 预约处理 — 1:1 对齐 Qt OrderDialog.ui / OrderDialog.cpp
- * 右侧：WHEP 看画面（cam4）。Pad 暂不接入对讲硬件。
+ * 右侧：WHEP 看画面（cam4），浏览器经后端连接预约海康实时对讲。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -11,6 +11,7 @@ import { useBookingDialog } from './composables/useBookingDialog'
 import type { BookingAcceptPayload } from './types'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
 import { TALK_WHEP_URL } from '@/config/liveVideo'
+import { useBrowserTalk } from '@/composables/useBrowserTalk'
 
 const emit = defineEmits<{
   close: []
@@ -52,6 +53,7 @@ const {
 } = useWhepPlayer()
 
 let videoRetryTimer: number | undefined
+let disposed = false
 
 const videoHint = computed(() => {
   if (videoError.value) return videoError.value
@@ -67,10 +69,11 @@ const showVideoHint = computed(() => videoStatus.value !== 'playing')
 
 async function startBookingVideo() {
   const el = liveVideoRef.value
-  if (!el) return
+  if (!el || disposed) return
   try {
     await playVideo({ video: el, whepUrl: TALK_WHEP_URL })
   } catch {
+    if (disposed) return
     window.clearTimeout(videoRetryTimer)
     videoRetryTimer = window.setTimeout(() => {
       void startBookingVideo()
@@ -80,14 +83,9 @@ async function startBookingVideo() {
 
 /** 初始化预约会话期间；不把命令提交当作设备正在播放。 */
 const sessionInitializing = ref(true)
-const talking = ref(false)
-const talkHint = computed(() =>
-  sessionInitializing.value ? '预约初始化中' : 'Pad 对讲设备暂未接入',
-)
-const canToggleTalk = computed(() => false)
-function toggleTalk() {
-  // 预留按钮位置；新对讲硬件到场后接入浏览器原生方案。
-}
+const { talking, busy: talkBusy, hint: talkHint, error: talkError,
+  stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
+const canToggleTalk = computed(() => !submitting.value)
 
 /** 左侧雷达图是否已在浏览器解码完成 */
 const radarImageReady = ref(false)
@@ -139,6 +137,7 @@ function onRadarImageError() {
 }
 
 async function handleConfirmYes() {
+  stopTalk()
   try {
     try {
       await stopVideo()
@@ -188,6 +187,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   window.clearTimeout(videoRetryTimer)
   void stopVideo()
 })
@@ -241,16 +241,17 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="btn-talk"
-          :class="{ on: talking, announcing: sessionInitializing }"
+          :class="{ on: talking, announcing: talkBusy }"
           :disabled="!canToggleTalk"
           :title="talkHint || '对讲'"
           @click="toggleTalk"
         >
-          {{ sessionInitializing ? '初始化中' : '对讲暂未接入' }}
+          {{ talking ? '结束对讲' : talkBusy ? '取消连接' : '开始对讲' }}
         </button>
         <span
-          v-if="talkHint && !sessionInitializing"
+          v-if="talkHint"
           class="talk-hint"
+          :class="{ err: !!talkError }"
         >
           {{ talkHint }}
         </span>

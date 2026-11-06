@@ -90,7 +90,7 @@ const fillLightIcon = computed(() =>
       <button
         type="button"
         class="icon-btn"
-        :title="talkDisabled ? 'Pad 对讲设备暂未接入' : '视频喊话'"
+        :title="talkDisabled ? '请在预约窗口中进行对讲' : '实时可视对讲'"
         :disabled="talkDisabled"
         @click="emit('talkClick')"
       >

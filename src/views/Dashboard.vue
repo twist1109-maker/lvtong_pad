@@ -21,6 +21,7 @@ import {
   type XrayMachinePhase,
 } from '@/utils/plcXrayStatus'
 import BookingDialog from '@/modules/booking/BookingDialog.vue'
+import TalkDialog from '@/components/TalkDialog.vue'
 import SafeCameraDialog from '@/components/SafeCameraDialog.vue'
 import AgriculturalSelect from '@/components/AgriculturalSelect.vue'
 import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
@@ -59,6 +60,8 @@ const router = useRouter()
 const showHistory = ref(false)
 /** 左下第四个“拍照”流程图标：周界相机 A 纯视频。 */
 const showSafeCameraDialog = ref(false)
+const showTalkDialog = ref(false)
+watch(() => bookingStore.dialogVisible, () => { showTalkDialog.value = false })
 /** 通行码先选择摄像头或键盘式扫码仪。 */
 const showPasscodeScan = ref(false)
 
@@ -2475,10 +2478,11 @@ onUnmounted(() => {
   wsStore.disconnect()
 })
 
-/** 任意弹窗打开（采集/预约等仍可能用海康 HWND） */
+/** 任意弹窗打开时暂停主页交互。 */
 const anyDialogOpen = computed(
   () =>
     showBooking.value ||
+    showTalkDialog.value ||
     showSafeCameraDialog.value ||
     showHistory.value ||
     showPlcControl.value ||
@@ -2611,7 +2615,8 @@ const anyDialogOpen = computed(
             :kv160="xrayTelemetry.kv160"
             :ma160="xrayTelemetry.ma160"
             :temp160="xrayTelemetry.temp160"
-            talk-disabled
+            :talk-disabled="showBooking"
+            @talk-click="showTalkDialog = true"
             @workflow-click="onWorkflowClick"
           />
         </div>
@@ -2858,6 +2863,7 @@ const anyDialogOpen = computed(
     />
 
     <!-- 预约弹窗 — 对齐 OrderDialog -->
+    <TalkDialog v-if="showTalkDialog && !showBooking" @close="showTalkDialog = false" />
     <BookingDialog
       v-if="showBooking"
       @close="bookingStore.closeDialog()"
