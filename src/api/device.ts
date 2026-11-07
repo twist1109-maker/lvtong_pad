@@ -165,6 +165,7 @@ export interface BodyRadarProjectionResult {
   source?: 'sample' | 'live'
   sourceLabel?: string
   fallbackReason?: string
+  geometry?: import('@/modules/bodyRadar/cloudGeometry').CloudGeometryPayload
   views?: Record<'top' | 'side', { imageUrl: string; metersPerPixel: number; coordinateAxes: string }>
 }
 export function fetchBodyRadarImageApi(view: 'top' | 'side') {

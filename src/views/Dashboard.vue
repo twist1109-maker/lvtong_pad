@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
@@ -9,6 +9,8 @@ import { controlGateApi, fetchBodyRadarImageApi, getGateStatusApi } from '@/api/
 import AppHeader from '@/components/AppHeader.vue'
 import type { ToolAnchor } from '@/components/AppHeader.vue'
 import BodyPointCloudPanel from '@/components/BodyPointCloudPanel.vue'
+import type { CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
+const BodyCloud3DPanel = defineAsyncComponent(() => import('@/components/BodyCloud3DPanel.vue'))
 import PreviewButton from '@/components/PreviewButton.vue'
 import BottomWorkflowPanel from '@/components/BottomWorkflowPanel.vue'
 import type { WorkflowStepKey } from '@/components/WorkflowIcons.vue'
@@ -297,8 +299,8 @@ type BodyView = 'body' | 'top' | 'side'
 const BODY_VIEW_ORDER: BodyView[] = ['body', 'top', 'side']
 const BODY_VIEW_LABELS: Record<BodyView, string> = {
   body: '车身图',
-  top: '车顶图',
-  side: '车侧图',
+  top: '车顶3D',
+  side: '车侧3D',
 }
 const bodyView = ref<BodyView>('body')
 const bodyImageUrls = ref<Record<BodyView, string>>({
@@ -313,7 +315,9 @@ const bodyProjectionMeta = ref({
   side: { source: '', metersPerPixel: .01 },
 })
 const bodyProjectionError = ref('')
-const bodyProjectionDemo = computed(() => bodyView.value !== 'body' && bodyProjectionMeta.value[bodyView.value].source === 'sample')
+const bodyCloudGeometry = shallowRef<CloudGeometryPayload | null>(null)
+const bodyCloudSource = ref('')
+const bodyProjectionDemo = computed(() => bodyView.value !== 'body' && bodyCloudSource.value === 'sample')
 const bodyProjectionResolution = computed(() => bodyView.value === 'body' ? .01 : bodyProjectionMeta.value[bodyView.value].metersPerPixel)
 function bodyRadarForSave(view: 'top' | 'side') {
   return bodyProjectionMeta.value[view].source === 'sample' ? '' : bodyImageUrls.value[view]
@@ -341,7 +345,7 @@ const bodyPlaceholderTone = computed((): 'default' | 'occupied' | 'waiting' => {
 })
 const bodyPlaceholderText = computed(() => {
   if (bodyView.value !== 'body') {
-    if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return '正在生成点云投影…'
+    if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return '正在加载三维点云…'
     return bodyProjectionError.value || `${bodyViewLabel.value}暂无图像`
   }
   if (bodyPlaceholderTone.value === 'occupied') return '车道占用'
@@ -358,7 +362,7 @@ const bodyRadarFetching = ref<{ top: boolean; side: boolean }>({ top: false, sid
 let bodyProjectionGeneration = 0
 
 async function ensureBodyRadarImage(view: 'top' | 'side', refresh = false) {
-  if (!refresh && bodyImageUrls.value[view]) return
+  if (!refresh && bodyCloudGeometry.value) return
   if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return
   const generation = bodyProjectionGeneration
   bodyRadarFetching.value = { top: true, side: true }
@@ -367,6 +371,9 @@ async function ensureBodyRadarImage(view: 'top' | 'side', refresh = false) {
     const res = await fetchBodyRadarImageApi(view)
     if (generation !== bodyProjectionGeneration) return
     if (res.code !== 0) throw new Error(res.message || '点云投影获取失败')
+    if (!res.data?.geometry) throw new Error('接口未返回三维点云，请刷新重试')
+    bodyCloudGeometry.value = res.data.geometry
+    bodyCloudSource.value = res.data.source || 'live'
     const url = res?.data?.imageUrl
     if (res.data?.views) {
       for (const v of ['top', 'side'] as const) {
@@ -1691,6 +1698,8 @@ function doReset() {
   bodyRadarFetching.value = { top: false, side: false }
   bodyProjectionMeta.value = { top: { source: '', metersPerPixel: .01 }, side: { source: '', metersPerPixel: .01 } }
   bodyProjectionError.value = ''
+  bodyCloudGeometry.value = null
+  bodyCloudSource.value = ''
   laneOccupied.value = false
   gateReleased.value = false
   radarObjectCount.value = 0
@@ -2562,7 +2571,16 @@ const anyDialogOpen = computed(
               <img src="/assets/img/a_leftright.png" alt="" />
             </button>
           </div>
+          <BodyCloud3DPanel
+            v-if="bodyView !== 'body'"
+            :geometry="bodyCloudGeometry"
+            :view="bodyView"
+            :loading="bodyRadarFetching.top || bodyRadarFetching.side"
+            :error="bodyProjectionError"
+            :sample="bodyProjectionDemo"
+          />
           <BodyPointCloudPanel
+            v-else
             ref="bodyPcPanelRef"
             :placeholder="bodyPlaceholderText"
             :placeholder-tone="bodyPlaceholderTone"
