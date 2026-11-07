@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { decodeCloudGeometry, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
 
-const props = defineProps<{ geometry?: CloudGeometryPayload | null; view: 'top' | 'side'; loading?: boolean; error?: string; sample?: boolean }>()
+const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; sample?: boolean }>()
 const host = ref<HTMLDivElement | null>(null)
 const renderError = ref('')
 const ready = ref(false)
@@ -78,7 +78,7 @@ function resetView() {
   const span = Math.max(...dimensions.value, .01)
   controls.target.set(0, 0, 0)
   camera.up.set(0, 0, 1)
-  camera.position.copy(props.view === 'top' ? new THREE.Vector3(.05, -.14, 1) : new THREE.Vector3(.12, -1, .25)).multiplyScalar(span * 3)
+  camera.position.set(.5, -1, .5).multiplyScalar(span * 3)
   camera.lookAt(0, 0, 0)
   fitToBounds()
   controls.update()
@@ -171,7 +171,6 @@ onMounted(() => {
   }
 })
 watch(() => props.geometry, rebuild)
-watch(() => props.view, resetView)
 watch(ranges, updateBox, { deep: true })
 watch(boundsVisible, () => { if (boxGroup) boxGroup.visible = boundsVisible.value; render() })
 onBeforeUnmount(() => {
@@ -186,7 +185,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="body-cloud-3d" :data-ready="ready" :data-view="view">
+  <div class="body-cloud-3d" :data-ready="ready">
     <div ref="host" class="cloud-canvas" />
     <div v-if="ready" class="cloud-dimensions" aria-label="三维包围盒尺寸">
       <span v-for="(name, i) in axisNames" :key="name" :style="{ color: axisColors[i] }">{{ name }} <strong>{{ measured[i].toFixed(3) }}</strong> m</span>
