@@ -13,7 +13,12 @@ import {
   photoStamp,
   uploadMobileJson,
 } from '@/modules/padCapture/mobileProtocol'
-import { parsePasscode, type PasscodeInfo } from '@/modules/padCapture/passcode'
+import {
+  hasScannerEncodingArtifacts,
+  normalizePasscodeRaw,
+  parsePasscode,
+  type PasscodeInfo,
+} from '@/modules/padCapture/passcode'
 
 const props = withDefaults(defineProps<{ autoScan?: boolean; initialSource?: 'camera' | 'scanner' }>(), { autoScan: true })
 const emit = defineEmits<{ close: []; decoded: [info: PasscodeInfo, image: string] }>()
@@ -112,24 +117,34 @@ async function scanOnce() {
 
 async function acceptPasscode(raw: string, snapshot = '') {
   if (closed || uploading.value) return
-  const info = parsePasscode(raw)
+  const normalizedRaw = normalizePasscodeRaw(raw)
+  // 扫码枪输入框也展示规范化结果，避免界面仍显示设备原始乱码而让操作员误判。
+  if (source.value === 'scanner' && scannerText.value !== normalizedRaw) {
+    scannerText.value = normalizedRaw
+  }
+  const info = parsePasscode(normalizedRaw)
   if (!info) {
-    showTip('通行码内容无效', false)
+    showTip(
+      hasScannerEncodingArtifacts(normalizedRaw)
+        ? '扫码枪输出存在乱码。请设置为 USB KBW/HID、美式键盘和正确中文字符集后重新扫描。'
+        : '通行码内容无效',
+      false,
+    )
     scheduleScan()
     return
   }
   uploading.value = true
   stopScan()
   if (!scannedRaw.value) {
-    scannedRaw.value = raw
+    scannedRaw.value = normalizedRaw
     stopStream()
-    const image = await createPasscodeQrImage(raw).catch(() => snapshot)
+    const image = await createPasscodeQrImage(normalizedRaw).catch(() => snapshot)
     if (closed) return
     emit('decoded', info, image)
   }
   const name = `photo_${photoStamp()}_${Date.now()}.json`
   const json = emptyCaptureJson()
-  json.passcodeQRCodeInfo = raw
+  json.passcodeQRCodeInfo = normalizedRaw
   let ok = false
   try {
     ok = await uploadMobileJson(name, json, uploadController.signal)
@@ -141,7 +156,7 @@ async function acceptPasscode(raw: string, snapshot = '') {
   if (closed) return
   if (ok) {
     stopStream()
-    showTip(`通行码已识别并回填：${info.vehicleDisplayId}，出口称重 ${info.exWeight || '未提供'} kg。上传成功！`, true)
+    onClose()
   } else {
     showTip('通行码已识别并回填，上传失败。请检查网络后点击“重试上传”。', false)
     scheduleScan()

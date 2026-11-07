@@ -19,8 +19,39 @@ export interface PasscodeInfo {
   provinceCount: string
 }
 
+/**
+ * 统一扫码枪、粘贴和摄像头识别的文本形态。
+ * HID 扫码枪可能附带 CR/LF，中文输入法也可能把 ASCII 标点变为全角标点。
+ */
+export function normalizePasscodeRaw(raw: string): string {
+  const normalized = raw
+    .replace(/^\uFEFF/, '')
+    .replace(/[\r\n\t\0]+/g, '')
+    .replace(/｜/g, '|')
+    .replace(/：/g, ':')
+    .trim()
+
+  // NS012 的部分固件会把「辽」(U+8FBD) 的码值 8FBD 当作 GBK 输出成「徑」。
+  // 已用同一二维码的支付宝识别结果交叉确认，只修正通行码首字，避免影响正文。
+  return normalized.startsWith('徑') ? `辽${normalized.slice(1)}` : normalized
+}
+
+/** 明确拦截 HID 键盘布局/字符集损坏，避免错误车牌进入查验记录。 */
+export function hasScannerEncodingArtifacts(raw: string): boolean {
+  const vehicleId = normalizePasscodeRaw(raw).split('|', 1)[0] ?? ''
+  const province = vehicleId.charAt(0)
+  const validProvinces = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼港澳'
+  return (
+    /[\u2500-\u257f\uFFFD]/u.test(vehicleId)
+    || /[—－]{2}/u.test(vehicleId)
+    || (!!province && !validProvinces.includes(province))
+  )
+}
+
 export function parsePasscode(raw: string): PasscodeInfo | null {
-  const parts = raw.trim().split('|').map(p => p.trim())
+  const normalized = normalizePasscodeRaw(raw)
+  if (hasScannerEncodingArtifacts(normalized)) return null
+  const parts = normalized.split('|').map(p => p.trim())
   if (parts.length < 14) return null
   const vehicleId = parts[0]!
   const vehicleDisplayId = vehicleId.replace(/_[0-9]+$/, '')
