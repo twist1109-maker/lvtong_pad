@@ -308,6 +308,16 @@ const bodyImageUrls = ref<Record<BodyView, string>>({
 })
 const bodyImageUrl = computed(() => bodyImageUrls.value[bodyView.value])
 const bodyViewLabel = computed(() => BODY_VIEW_LABELS[bodyView.value])
+const bodyProjectionMeta = ref({
+  top: { source: '', metersPerPixel: .01 },
+  side: { source: '', metersPerPixel: .01 },
+})
+const bodyProjectionError = ref('')
+const bodyProjectionDemo = computed(() => bodyView.value !== 'body' && bodyProjectionMeta.value[bodyView.value].source === 'sample')
+const bodyProjectionResolution = computed(() => bodyView.value === 'body' ? .01 : bodyProjectionMeta.value[bodyView.value].metersPerPixel)
+function bodyRadarForSave(view: 'top' | 'side') {
+  return bodyProjectionMeta.value[view].source === 'sample' ? '' : bodyImageUrls.value[view]
+}
 
 /** 车身图无图时的占位：车道占用(红) → 等待驶入(绿) → 默认 */
 const GATE_RELEASE_MIN_DISTANCE_M = 25
@@ -330,6 +340,10 @@ const bodyPlaceholderTone = computed((): 'default' | 'occupied' | 'waiting' => {
   return 'default'
 })
 const bodyPlaceholderText = computed(() => {
+  if (bodyView.value !== 'body') {
+    if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return '正在生成点云投影…'
+    return bodyProjectionError.value || `${bodyViewLabel.value}暂无图像`
+  }
   if (bodyPlaceholderTone.value === 'occupied') return '车道占用'
   if (bodyPlaceholderTone.value === 'waiting') return '等待驶入'
   return '车身影像'
@@ -341,21 +355,33 @@ function onBodyViewSwap() {
 }
 
 const bodyRadarFetching = ref<{ top: boolean; side: boolean }>({ top: false, side: false })
+let bodyProjectionGeneration = 0
 
-async function ensureBodyRadarImage(view: 'top' | 'side') {
-  if (bodyImageUrls.value[view]) return
-  if (bodyRadarFetching.value[view]) return
-  bodyRadarFetching.value = { ...bodyRadarFetching.value, [view]: true }
+async function ensureBodyRadarImage(view: 'top' | 'side', refresh = false) {
+  if (!refresh && bodyImageUrls.value[view]) return
+  if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return
+  const generation = bodyProjectionGeneration
+  bodyRadarFetching.value = { top: true, side: true }
+  bodyProjectionError.value = ''
   try {
     const res = await fetchBodyRadarImageApi(view)
+    if (generation !== bodyProjectionGeneration) return
+    if (res.code !== 0) throw new Error(res.message || '点云投影获取失败')
     const url = res?.data?.imageUrl
-    if (url) {
+    if (res.data?.views) {
+      for (const v of ['top', 'side'] as const) {
+        bodyImageUrls.value[v] = res.data.views[v].imageUrl
+        bodyProjectionMeta.value[v] = { source: res.data.source || 'live', metersPerPixel: res.data.views[v].metersPerPixel }
+      }
+    } else if (url) {
       bodyImageUrls.value = { ...bodyImageUrls.value, [view]: url }
     }
   } catch (e) {
+    if (generation !== bodyProjectionGeneration) return
+    bodyProjectionError.value = e instanceof Error ? e.message : '点云投影获取失败'
     console.warn(`[BODY] ${view} 雷达图按需拉取失败`, e)
   } finally {
-    bodyRadarFetching.value = { ...bodyRadarFetching.value, [view]: false }
+    if (generation === bodyProjectionGeneration) bodyRadarFetching.value = { top: false, side: false }
   }
 }
 
@@ -1661,6 +1687,10 @@ function doReset() {
   weightRangeHint.value = ''
   aiLicenseCropLastKey = ''
   bodyImageUrls.value = { body: '', top: '', side: '' }
+  bodyProjectionGeneration++
+  bodyRadarFetching.value = { top: false, side: false }
+  bodyProjectionMeta.value = { top: { source: '', metersPerPixel: .01 }, side: { source: '', metersPerPixel: .01 } }
+  bodyProjectionError.value = ''
   laneOccupied.value = false
   gateReleased.value = false
   radarObjectCount.value = 0
@@ -1763,8 +1793,8 @@ function buildSubmitPreview(): InspectionDetail {
     tail_image_path: toApiUrl(captureThumbs.value.tail || '') || undefined,
     top_image_path: toApiUrl(resolveTopImageRef()) || undefined,
     body_image_path: toApiUrl(bodyImageUrls.value.body || '') || undefined,
-    radar_side_image_path: toApiUrl(bodyImageUrls.value.side || '') || undefined,
-    radar_top_image_path: toApiUrl(bodyImageUrls.value.top || '') || undefined,
+    radar_side_image_path: toApiUrl(bodyRadarForSave('side')) || undefined,
+    radar_top_image_path: toApiUrl(bodyRadarForSave('top')) || undefined,
     radar_head_image_path: toApiUrl(bookingStore.radarHeadImageUrl || '') || undefined,
     transparent_image_path:
       toApiUrl(xrayDisplayUrl.value || xrayImageUrls.value['200'] || '') || undefined,
@@ -1901,8 +1931,8 @@ async function onSubmitConfirmYes(payload?: {
     // 车顶：图像采集区域（与预览一致），不用车身影像雷达测顶
     top_image_path: toStoragePath(resolveTopImageRef()),
     // 雷达三图：车侧/车顶来自车身影像；车头来自预约受理图
-    radar_side_image_path: toStoragePath(bodyImageUrls.value.side || ''),
-    radar_top_image_path: toStoragePath(bodyImageUrls.value.top || ''),
+    radar_side_image_path: toStoragePath(bodyRadarForSave('side')),
+    radar_top_image_path: toStoragePath(bodyRadarForSave('top')),
     radar_head_image_path: toStoragePath(bookingStore.radarHeadImageUrl || ''),
     transparent_image_path: toStoragePath(xrayImageUrls.value['200'] || ''),
     // 通行码 QR 图（对齐 Qt m_codeImagePath，flask 后端生成）
@@ -2224,6 +2254,8 @@ function setupWS() {
       const u2 = pickUrl(data.urls, '2')
       const u3 = pickUrl(data.urls, '3')
       // 整对象替换，保证面板 computed 一定刷新
+      if (u2) bodyProjectionMeta.value.top = { source: 'live', metersPerPixel: .01 }
+      if (u3) bodyProjectionMeta.value.side = { source: 'live', metersPerPixel: .01 }
       bodyImageUrls.value = {
         body: u1 || bodyImageUrls.value.body,
         top: u2 || bodyImageUrls.value.top,
@@ -2520,7 +2552,12 @@ const anyDialogOpen = computed(
             <img src="/assets/img/a_car.png" class="panel-icon" alt="" />
             <span class="panel-title">车身影像</span>
             <span class="header-spacer" aria-hidden="true" />
+            <span v-if="bodyProjectionDemo" class="projection-source">示范数据</span>
+            <span v-if="bodyView !== 'body' && bodyProjectionError" class="projection-error" :title="bodyProjectionError">拉取失败</span>
             <span class="xray-meta">{{ bodyViewLabel }}：</span>
+            <button v-if="bodyView !== 'body'" type="button" class="header-icon-btn" title="刷新点云投影" aria-label="刷新点云投影" :disabled="bodyRadarFetching.top || bodyRadarFetching.side" @click="ensureBodyRadarImage(bodyView, true)">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f9182" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 4v7h-7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
             <button type="button" class="header-icon-btn header-icon-swap" title="切换视角" @click="onBodyViewSwap">
               <img src="/assets/img/a_leftright.png" alt="" />
             </button>
@@ -2532,6 +2569,7 @@ const anyDialogOpen = computed(
             :image-url="bodyImageUrl || undefined"
             :source-temp-url="bodyImageUrl || undefined"
             :view="bodyView"
+            :meters-per-pixel="bodyProjectionResolution"
             @crop="onBodyBoxCrop"
           />
         </div>
@@ -3046,7 +3084,11 @@ const anyDialogOpen = computed(
 </template>
 
 <style scoped lang="scss">
+
 @use '@/styles/variables.scss' as *;
+.projection-source { color: #9a650c; font-size: 13px; white-space: nowrap; }
+.projection-error { color: #b83f32; font-size: 13px; white-space: nowrap; }
+
 
 .dashboard {
   display: flex;

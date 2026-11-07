@@ -14,6 +14,8 @@ const props = defineProps<{
   /** 成对原图对应的预览 temp URL；缺省用 imageUrl（车身）；透视色阶后仍指向源 temp */
   sourceTempUrl?: string
   view: BodyPcView
+  /** 投影原图的米/像素，跟随后端降分辨率同步更新。 */
+  metersPerPixel?: number
   placeholder?: string
   /** 无图占位文字色调：default 灰 / occupied 红 / waiting 绿 */
   placeholderTone?: 'default' | 'occupied' | 'waiting'
@@ -103,7 +105,8 @@ const draftStyle = computed(() => {
 })
 
 function meters(px: number) {
-  return px * PIXEL_TO_METER
+  const resolution = props.metersPerPixel
+  return px * (resolution && Number.isFinite(resolution) && resolution > 0 ? resolution : PIXEL_TO_METER)
 }
 
 function fmt(m: number) {
@@ -452,6 +455,7 @@ function onSelectBox(id: number, e: PointerEvent) {
   selectedBoxId.value = id
 }
 
+watch(() => props.metersPerPixel, updateMeasure)
 watch(
   () => [props.imageUrl, props.view] as const,
   async () => {

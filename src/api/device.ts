@@ -158,8 +158,17 @@ export function controlGateApi(action: 'open' | 'close' | 'toggle') {
 }
 
 /** POST /api/device/body-radar-image — 切换显示车顶/车侧雷达图时按需拉图 */
+export interface BodyRadarProjectionResult {
+  imageUrl: string
+  view: string
+  slot?: string
+  source?: 'sample' | 'live'
+  sourceLabel?: string
+  fallbackReason?: string
+  views?: Record<'top' | 'side', { imageUrl: string; metersPerPixel: number; coordinateAxes: string }>
+}
 export function fetchBodyRadarImageApi(view: 'top' | 'side') {
-  return request<{ imageUrl: string; view: string; slot?: string }>(
+  return request<BodyRadarProjectionResult>(
     '/device/body-radar-image',
     {
       method: 'POST',
