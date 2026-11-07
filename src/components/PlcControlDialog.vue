@@ -22,6 +22,8 @@ const emit = defineEmits<{ close: [] }>()
 const wsStore = useWsStore()
 const voiceStatus = ref<PlcVoiceStatus>({ front: null, back: null })
 const voiceRows = [{ key: 'front', label: '前语音' }, { key: 'back', label: '后语音' }] as const
+const plcFeedbackFresh = ref(true)
+const radiometer = ref<{ value: number; fresh: boolean; unit: string | null } | null>(null)
 
 /** 确认框 */
 const confirmVisible = ref(false)
@@ -80,7 +82,8 @@ const states = ref<Record<string, boolean>>({
 })
 
 function applyStatus(d: Record<string, unknown>) {
-  voiceStatus.value = parsePlcVoiceStatus(d)
+  plcFeedbackFresh.value = d.fresh !== false
+  voiceStatus.value = parsePlcVoiceStatus(plcFeedbackFresh.value ? d : {})
   const lights = parsePlcSignalLights(d)
   states.value.redlight = lights.red
   states.value.yellowlight = lights.yellow
@@ -107,6 +110,14 @@ function onSysMenuDocClick() {
 /** 打开期间 500ms 拉一次后端缓存的 DEVICE 状态（发令后设备未动也能回弹） */
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
 let unsubPlcStatus: (() => void) | null = null
+let unsubRadiometer: (() => void) | null = null
+
+async function refreshRadiometer() {
+  try {
+    const res = await request<typeof radiometer.value>('/device/radiometer-status')
+    radiometer.value = res.data ?? null
+  } catch { radiometer.value = null }
+}
 
 async function refreshPlcStatus() {
   try {
@@ -123,14 +134,21 @@ onMounted(() => {
     applyStatus(wsStore.lastPlcStatus)
   }
   void refreshPlcStatus()
+  void refreshRadiometer()
   statusPollTimer = setInterval(() => {
     void refreshPlcStatus()
+    void refreshRadiometer()
   }, 500)
   unsubPlcStatus = wsStore.subscribe('plc_status', onWsPlcStatus)
+  unsubRadiometer = wsStore.subscribe('radiometer_status', msg => {
+    const data = msg.data as typeof radiometer.value
+    if (data && Number.isFinite(data.value)) radiometer.value = data
+  })
   document.addEventListener('click', onSysMenuDocClick)
 })
 
 onUnmounted(() => {
+  unsubRadiometer?.()
   document.removeEventListener('click', onSysMenuDocClick)
   if (statusPollTimer != null) {
     clearInterval(statusPollTimer)
@@ -279,11 +297,18 @@ const dialogStyle = computed(() => {
       </div>
 
       <div class="voice-feedback" aria-label="语音播报反馈" aria-live="polite">
+        <div v-if="!plcFeedbackFresh" role="status">设备反馈已超时，开关显示为最后状态</div>
         <div v-for="row in voiceRows" :key="row.key" class="voice-row">
           <span>{{ row.label }}</span>
           <span :class="{ playing: wsStore.isConnected && voiceStatus[row.key] === true }">
             {{ voiceStatusText(wsStore.isConnected ? voiceStatus[row.key] : null) }}
           </span>
+        </div>
+        <div class="voice-row" aria-label="辐射计数值">
+          <span>辐射计</span>
+          <span v-if="!wsStore.isConnected || !radiometer">待反馈</span>
+          <span v-else-if="!radiometer.fresh">数据已过期</span>
+          <span v-else>{{ radiometer.value }}</span>
         </div>
       </div>
 

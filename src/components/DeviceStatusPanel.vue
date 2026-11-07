@@ -14,6 +14,8 @@ export interface DeviceRow {
   deviceType?: string
   status: string
   connected: boolean
+  online?: boolean | null
+  state?: boolean | null
 }
 
 const props = defineProps<{
@@ -31,11 +33,14 @@ const devices = ref<DeviceRow[]>([])
 const loading = ref(false)
 const toastVisible = ref(false)
 const toastText = ref('')
+let statusTimer: ReturnType<typeof setInterval> | null = null
+let fetching = false
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const sysMenuOpen = ref(false)
 
 function statusColor(d: DeviceRow): string {
+  if (d.online == null) return '#888'
   // 对齐 Qt：离线/错误红 #c0392b，忙橙 #f39c12，否则绿 #27ae60
   const t = d.status || ''
   if (!d.connected || t.includes('离线') || t.includes('错误')) return '#c0392b'
@@ -44,15 +49,17 @@ function statusColor(d: DeviceRow): string {
 }
 
 async function fetchStatus() {
+  if (fetching) return
+  fetching = true
   loading.value = true
   try {
-    const res = await request<{ devices: DeviceRow[]; onlineCount: number; total: number }>(
+    const res = await request<{ devices: DeviceRow[]; sensors?: DeviceRow[]; onlineCount: number; total: number }>(
       '/device/status',
     )
     if (res.code === 0 && res.data?.devices) {
-      devices.value = res.data.devices
+      devices.value = res.data.sensors ?? res.data.devices
       const allOnline =
-        res.data.devices.length > 0 && res.data.devices.every((d) => d.connected)
+        devices.value.length > 0 && devices.value.every((d) => d.connected)
       emit('statusChange', allOnline)
     } else {
       devices.value = []
@@ -63,6 +70,7 @@ async function fetchStatus() {
     emit('statusChange', false)
   } finally {
     loading.value = false
+    fetching = false
   }
 }
 
@@ -130,9 +138,11 @@ function onDocClick() {
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   void fetchStatus()
+  statusTimer = setInterval(() => { void fetchStatus() }, 2000)
 })
 
 onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
   document.removeEventListener('click', onDocClick)
   if (toastTimer) clearTimeout(toastTimer)
 })
@@ -158,7 +168,7 @@ onUnmounted(() => {
         >
           <img class="title-icon" src="/assets/img/logo.ico" alt="" />
         </button>
-        <span id="dev-dlg-title" class="dialog-title">设备连接状态</span>
+        <span id="dev-dlg-title" class="dialog-title">传感器连接状态</span>
         <button type="button" class="dialog-close" title="关闭" @click="emit('close')">×</button>
 
         <div v-if="sysMenuOpen" class="sys-menu" @click.stop>
@@ -190,17 +200,19 @@ onUnmounted(() => {
               <tr>
                 <th>设备名称</th>
                 <th class="col-status">状态</th>
+                <th>动作位</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!loading && devices.length === 0">
-                <td colspan="2" class="empty-cell">暂无设备信息</td>
+                <td colspan="3" class="empty-cell">暂无设备信息</td>
               </tr>
               <tr v-for="d in devices" :key="d.deviceId">
                 <td>{{ d.deviceName || d.deviceId }}</td>
                 <td class="col-status" :style="{ color: statusColor(d) }">
                   {{ d.status || (d.connected ? '在线' : '离线') }}
                 </td>
+                <td>{{ d.state == null ? '—' : d.state ? '1' : '0' }}</td>
               </tr>
             </tbody>
           </table>

@@ -126,7 +126,7 @@ const tools = computed(() => {
     {
       key: 'device',
       icon: devicesOnline ? '/assets/img/s_connect.png' : '/assets/img/s_disconnect.png',
-      tip: devicesOnline ? '设备连接状态：在线' : '设备连接状态：离线',
+      tip: devicesOnline ? '传感器连接状态：在线' : '传感器连接状态：离线或待反馈',
     },
     { key: 'user', icon: '/assets/img/usrmgr.png', tip: '用户管理' },
   ]

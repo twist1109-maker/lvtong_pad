@@ -1570,6 +1570,20 @@ function applyGateFromStickdown(stickdown: boolean) {
   gateOpen.value = stickdown
 }
 
+function gateFeedbackOnline(data: Record<string, unknown>): boolean {
+  const sensors = data.sensors as { bit: number; online: boolean | null }[] | undefined
+  return data.fresh === true && sensors?.find(row => row.bit === 6)?.online === true
+}
+
+async function refreshSensorOnline() {
+  if (showDeviceStatus.value) return
+  try {
+    const res = await request<{ sensors?: { connected: boolean }[] }>('/device/status')
+    const sensors = res.data?.sensors
+    devicesOnline.value = !!sensors?.length && sensors.every(sensor => sensor.connected)
+  } catch { devicesOnline.value = false }
+}
+
 async function refreshGateStatus() {
   try {
     const res = await getGateStatusApi()
@@ -1594,7 +1608,7 @@ async function refreshGateFromPlcCache() {
       applyPlcDeviceStatus(res.data)
       if (typeof res.data.stickdown === 'boolean') {
         applyGateFromStickdown(res.data.stickdown)
-        gateOnline.value = true
+        gateOnline.value = gateFeedbackOnline(res.data)
       }
     }
   } catch {
@@ -2093,7 +2107,7 @@ function setupWS() {
     // DEVICE cmd bit6 → 闸机图标（1=抬起，0=落下）
     if (data && typeof data.stickdown === 'boolean') {
       applyGateFromStickdown(data.stickdown)
-      gateOnline.value = true
+      gateOnline.value = gateFeedbackOnline(data)
     }
   })
 
@@ -2501,8 +2515,10 @@ onMounted(async () => {
   startLiveVideo()
   void refreshGateStatus()
   void refreshGateFromPlcCache()
+  void refreshSensorOnline()
   gateStatusTimer = setInterval(() => {
     void refreshGateStatus()
+    void refreshSensorOnline()
   }, 2000)
 })
 
