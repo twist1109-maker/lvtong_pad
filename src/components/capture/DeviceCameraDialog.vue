@@ -8,6 +8,8 @@ const videoRef = ref<HTMLVideoElement | null>(null)
 const camera = useDeviceCamera(videoRef)
 const { status, error } = camera
 const shotError = ref('')
+const photoInput = ref<HTMLInputElement | null>(null)
+const photoPicking = ref(false)
 
 function capture() {
   try {
@@ -24,6 +26,48 @@ function close() {
   emit('close')
 }
 
+function pickPhoto() {
+  if (photoPicking.value) return
+  photoPicking.value = true
+  photoInput.value?.click()
+}
+
+function cancelPhoto() {
+  photoPicking.value = false
+}
+
+async function selectPhoto(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return cancelPhoto()
+
+  try {
+    const image = new Image()
+    const objectUrl = URL.createObjectURL(file)
+    try {
+      image.src = objectUrl
+      await image.decode()
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    const imageData = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(reader.error || new Error('读取照片失败'))
+      reader.readAsDataURL(file)
+    })
+    if (!imageData) throw new Error('读取照片失败')
+    camera.stop()
+    emit('capture', imageData)
+  } catch (cause) {
+    shotError.value = cause instanceof Error ? cause.message : '照片加载失败，请重试'
+  } finally {
+    cancelPhoto()
+  }
+}
+
 onMounted(() => { void camera.start() })
 </script>
 
@@ -37,6 +81,10 @@ onMounted(() => { void camera.start() })
         <footer>
           <button v-if="status === 'error'" type="button" @click="camera.start()">重新打开摄像头</button>
           <button type="button" :disabled="status !== 'ready'" @click="capture">拍照</button>
+          <input ref="photoInput" type="file" accept="image/*" hidden @change="selectPhoto" @cancel="cancelPhoto" />
+          <button type="button" class="photo-button" :disabled="photoPicking" @click="pickPhoto">
+            {{ photoPicking ? '选择中…' : '选择照片' }}
+          </button>
           <button type="button" @click="close">取消</button>
         </footer>
       </section>
@@ -52,5 +100,7 @@ video { display: block; width: 100%; height: min(56dvh, 500px); object-fit: cont
 p { margin: 12px 0; }
 footer { display: flex; justify-content: center; gap: 12px; }
 button { padding: 10px 20px; background: #059669; color: white; border: 0; border-radius: 4px; cursor: pointer; }
+.photo-button { background: #16a34a; }
+.photo-button:hover:not(:disabled) { background: #15803d; }
 button:disabled { background: #9ca3af; cursor: default; }
 </style>
