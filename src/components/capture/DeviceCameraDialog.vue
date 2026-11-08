@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useDeviceCamera } from '@/composables/useDeviceCamera'
 
-defineProps<{ title: string }>()
+const props = defineProps<{ title: string; captureBlocked?: boolean }>()
 const emit = defineEmits<{ close: []; capture: [image: string] }>()
 const videoRef = ref<HTMLVideoElement | null>(null)
 const camera = useDeviceCamera(videoRef)
@@ -12,6 +12,7 @@ const photoInput = ref<HTMLInputElement | null>(null)
 const photoPicking = ref(false)
 
 function capture() {
+  if (props.captureBlocked) return
   try {
     const image = camera.captureJpeg()
     camera.stop()
@@ -77,10 +78,10 @@ onMounted(() => { void camera.start() })
       <section class="camera-dialog" role="dialog" aria-modal="true" :aria-label="title">
         <header>{{ title }}<button type="button" aria-label="关闭" @click="close">×</button></header>
         <video ref="videoRef" autoplay playsinline muted />
-        <p role="status">{{ error || shotError || (status === 'opening' ? '正在打开摄像头…' : '对准证件后点击拍照') }}</p>
+        <p role="status">{{ captureBlocked ? '车道占用，已暂停拍照' : error || shotError || (status === 'opening' ? '正在打开摄像头…' : '对准证件后点击拍照') }}</p>
         <footer>
           <button v-if="status === 'error'" type="button" @click="camera.start()">重新打开摄像头</button>
-          <button type="button" :disabled="status !== 'ready'" @click="capture">拍照</button>
+          <button type="button" :disabled="captureBlocked || status !== 'ready'" @click="capture">拍照</button>
           <input ref="photoInput" type="file" accept="image/*" hidden @change="selectPhoto" @cancel="cancelPhoto" />
           <button type="button" class="photo-button" :disabled="photoPicking" @click="pickPhoto">
             {{ photoPicking ? '选择中…' : '选择照片' }}

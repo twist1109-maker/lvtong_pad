@@ -13,6 +13,7 @@ const props = defineProps<{
   licenseSrc?: string
   licenseGcSrc?: string
   licenseStitchedSrc?: string
+  captureBlocked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -243,6 +244,7 @@ async function onClose() {
     <DeviceCameraDialog
       v-if="pickTarget"
       :title="pickTarget === 'main' ? '拍摄主行驶证' : '拍摄挂车证'"
+      :capture-blocked="captureBlocked"
       @capture="onCameraCapture"
       @close="pickTarget = null"
     />

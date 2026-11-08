@@ -2977,6 +2977,7 @@ const anyDialogOpen = computed(
     <CaptureCameraDialog
       v-if="captureDialog"
       :kind="captureDialog"
+      :capture-blocked="isPreGateLaneBlocked"
       :initial-images="captureDialogInitial"
       @confirm="(imgs) => onCaptureConfirm(captureDialog!, imgs)"
       @close="captureDialog = null"
@@ -2988,6 +2989,7 @@ const anyDialogOpen = computed(
       :license-src="licensePaths.license"
       :license-gc-src="licensePaths.licenseGc"
       :license-stitched-src="licensePaths.licenseStitched"
+      :capture-blocked="isPreGateLaneBlocked"
       @confirm="onLicenseConfirm"
       @close="showLicenseDialog = false"
     />

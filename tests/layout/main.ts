@@ -16,6 +16,7 @@ import '../../src/styles/global.scss'
 import '../../src/styles/fitted-screen.scss'
 
 const fixtureOptions = new URLSearchParams(location.search)
+const captureBlocked = ref(fixtureOptions.get('captureBlocked') === '1')
 if (fixtureOptions.get('detector') === 'absent') {
   Object.defineProperty(globalThis, 'BarcodeDetector', { configurable: true, value: undefined })
 }
@@ -81,9 +82,9 @@ const router = createRouter({
   routes: [
     { path: '/', component: () => import('../../src/views/Dashboard.vue') },
     { path: '/login', component: () => import('../../src/modules/auth/LoginView.vue') },
-    { path: '/capture', component: { render: () => h(CaptureCameraDialog, { kind: 'head' }) } },
+    { path: '/capture', component: { render: () => h(CaptureCameraDialog, { kind: 'head', captureBlocked: captureBlocked.value }) } },
     { path: '/goods', component: { render: () => h(CaptureCameraDialog, { kind: 'goods' }) } },
-    { path: '/license', component: DrivingLicenseDialog },
+    { path: '/license', component: { render: () => h(DrivingLicenseDialog, { captureBlocked: captureBlocked.value }) } },
     { path: '/scan', component: { render: () => h(PasscodeScanDialog, { initialSource: 'camera' }) } },
     { path: '/scan-manual', component: { render: () => h(PasscodeScanDialog, { initialSource: 'camera', autoScan: false }) } },
     { path: '/scan-source', component: PasscodeScanDialog },
@@ -95,7 +96,16 @@ const router = createRouter({
     { path: '/products', component: openedDialog(AgriculturalSelect) },
   ],
 })
-const app = createApp(App)
+const captureGuardFixture = defineComponent({
+  setup: () => () => [
+    h(App),
+    h('button', {
+      style: 'position:fixed;top:0;right:0;z-index:20000;padding:8px;background:#fff;color:#000',
+      onClick: () => { captureBlocked.value = !captureBlocked.value },
+    }, captureBlocked.value ? '模拟解除占用' : '模拟车道占用'),
+  ],
+})
+const app = createApp(fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
 app.use(pinia)
 app.use(router)
 useAuthStore().user = { username: 'layout-test', realName: '布局测试', phone: '', role: 1 }

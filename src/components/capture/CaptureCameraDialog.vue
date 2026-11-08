@@ -25,6 +25,7 @@ export type CaptureKind = 'head' | 'tail' | 'top' | 'goods' | 'evidence'
 const props = defineProps<{
   kind: CaptureKind
   initialImages?: string[]
+  captureBlocked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -80,6 +81,7 @@ const {
 } = useWhepPlayer()
 
 const liveHint = computed(() => {
+  if (props.captureBlocked) return '车道占用，已暂停拍照'
   if (captureError.value) return captureError.value
   if (!useWhepPreview.value) {
     return deviceCamera.error.value || (deviceCamera.status.value === 'opening' ? '正在打开摄像头…' : '对准目标后点击拍照')
@@ -94,6 +96,7 @@ const liveHint = computed(() => {
   return '准备播放…'
 })
 const showLiveHint = computed(() => {
+  if (props.captureBlocked) return true
   if (captureError.value || !useWhepPreview.value) return true
   if (switchingCamera.value) return false
   return whepStatus.value !== 'playing'
@@ -435,7 +438,7 @@ function captureFromWhepVideo(): string {
 }
 
 async function onCaptureClick() {
-  if (capturing.value || closing.value) return
+  if (props.captureBlocked || capturing.value || closing.value) return
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
   captureError.value = ''
@@ -770,7 +773,7 @@ function openPreview() {
               <button
                 type="button"
                 class="btn-shot"
-                :disabled="capturing || !previewPlaying || closing"
+                :disabled="captureBlocked || capturing || !previewPlaying || closing"
                 @click="onCaptureClick"
               >
                 {{ capturing ? '拍照中…' : '拍照' }}
