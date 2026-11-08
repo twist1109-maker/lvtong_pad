@@ -61,11 +61,12 @@ function fitToBounds() {
 }
 function resize() {
   if (!renderer || !host.value) return
-  const previousAspect = width / height
   width = Math.max(1, host.value.clientWidth)
   height = Math.max(1, host.value.clientHeight)
-  if (ready.value && Math.abs(previousAspect - width / height) > .001) fitToBounds()
   renderer.setSize(width, height, false)
+  // 画布尺寸只负责更新视口宽高，不能重新计算模型尺度。否则外层页面缩放、
+  // Pad 横竖屏切换或面板像素尺寸变化都会把 camera.zoom 重置为 1，造成点云
+  // 看起来随像素值二次缩放，并丢失用户当前的滚轮/双指缩放状态。
   camera.left = -halfHeight * width / height
   camera.right = halfHeight * width / height
   camera.top = halfHeight
