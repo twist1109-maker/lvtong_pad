@@ -322,17 +322,14 @@ function bodyRadarForSave(view: 'top' | 'side') {
 }
 
 /** 车身图无图时的占位：车道占用(红) → 等待驶入(绿) → 默认 */
-const GATE_RELEASE_MIN_DISTANCE_M = 25
 const laneOccupied = ref(false)
 const gateReleased = ref(false)
 const radarObjectCount = ref(0)
 
 const isPreGateLaneBlocked = computed(() => {
   if (!bookingStore.isDetection || gateReleased.value) return false
-  if (laneOccupied.value) return true
-  if (radarObjectCount.value !== 1) return radarObjectCount.value > 0
-  const d = workflow.value.distance
-  return d > 0 && d < GATE_RELEASE_MIN_DISTANCE_M
+  // 占用状态由后端按统一阈值和连续帧判定；前端不再用抖动的物体数重复推断。
+  return laneOccupied.value
 })
 
 const bodyPlaceholderTone = computed((): 'default' | 'occupied' | 'waiting' => {
