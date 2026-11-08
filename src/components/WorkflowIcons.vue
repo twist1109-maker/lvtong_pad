@@ -104,6 +104,7 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
         <span
           class="wf-label"
           :class="{
+            'is-gate': item.key === 'gate',
             active: item.key === 'book' && bookingActive,
             pending: item.key === 'book' && bookingPending,
           }"
@@ -173,6 +174,11 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
   font-weight: bold;
   color: #333;
   white-space: nowrap;
+
+  /* 闸机图片右侧预留横杆画布，文字应对准左侧立柱的视觉中心。 */
+  &.is-gate {
+    transform: translateX(-17px);
+  }
 
   &.active {
     color: #059669;
