@@ -3,7 +3,7 @@
  * 预约处理 — 左侧竖屏视频、中间雷达、右侧设置。
  * 左侧竖屏预约视频，中间雷达图，右侧设置；对讲经后端连接预约海康。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import RadarImagePanel from './components/RadarImagePanel.vue'
 import SlipToggle from './components/SlipToggle.vue'
@@ -23,7 +23,10 @@ const {
   loading,
   submitting,
   radarImageUrl,
-  radarFetchFailed,
+  manualScale,
+  setLinePosition,
+  onRadarImageLoaded,
+  onRadarImageError,
   linePosition,
   xrayEnabled,
   confirmVisible,
@@ -81,69 +84,20 @@ async function startBookingVideo() {
   }
 }
 
-/** 初始化预约会话期间；不把命令提交当作设备正在播放。 */
-const sessionInitializing = ref(true)
 const { talking, busy: talkBusy, hint: talkHint, error: talkError,
   speakerMuted, toggleSpeaker, stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
 const canToggleTalk = computed(() => !submitting.value)
 
-/** 雷达图是否已在浏览器解码完成 */
-const radarImageReady = ref(false)
-watch(radarImageUrl, () => {
-  radarImageReady.value = false
-})
-
-const videoReady = computed(() => videoStatus.value === 'playing')
-const radarReady = computed(
-  () => !!radarImageUrl.value && radarImageReady.value && !loading.value,
-)
-/** 受理：视频 + 雷达图就绪（初始化完成即可，不等待语音播放） */
-const canAccept = computed(
-  () =>
-    !sessionInitializing.value &&
-    videoReady.value &&
-    radarReady.value &&
-    !submitting.value,
-)
-/** 驳回：拉图失败或非加载中即可驳回（避免雷达超时把界面卡死） */
-const canReject = computed(
-  () =>
-    !sessionInitializing.value &&
-    !submitting.value &&
-    !loading.value &&
-    (radarReady.value || radarFetchFailed.value),
-)
-const decideHint = computed(() => {
-  if (submitting.value) return ''
-  if (sessionInitializing.value) return '正在初始化预约…'
-  if (loading.value) return '正在拉取雷达图（失败会自动重试），请稍候…'
-  if (canAccept.value) return ''
-  if (radarFetchFailed.value && !radarReady.value) {
-    return '雷达图拉取失败：可点刷新重试，或直接驳回'
-  }
-  const missing: string[] = []
-  if (!radarReady.value) missing.push('雷达图')
-  if (!videoReady.value) missing.push('视频')
-  if (!missing.length) return ''
-  return `请等待${missing.join('、')}加载完成后再受理`
-})
-
-function onRadarImageLoaded() {
-  radarImageReady.value = true
-}
-
-function onRadarImageError() {
-  radarImageReady.value = false
-}
+/** 媒体加载不限制业务决定；仅正在提交时防止重复操作。 */
+const canAccept = computed(() => !submitting.value)
+const canReject = computed(() => !submitting.value)
+const decideHint = computed(() => manualScale.value
+  ? '暂无雷达图：按参考刻度估算车头长度，向右拖动红线增大距离' : '')
 
 async function handleConfirmYes() {
   stopTalk()
   try {
-    try {
-      await stopVideo()
-    } catch {
-      /* ignore */
-    }
+    void stopVideo().catch(() => { /* 视频清理不阻塞受理/驳回 */ })
     const result = await confirmYes()
     if (result?.kind === 'accept') {
       emit('accept', result.payload)
@@ -158,7 +112,7 @@ async function handleConfirmYes() {
 }
 
 function onOverlayClick() {
-  if (submitting.value || loading.value || sessionInitializing.value) return
+  if (submitting.value) return
   requestConfirm('close')
 }
 
@@ -178,12 +132,7 @@ onMounted(async () => {
   // 开窗立刻加载 WHEP 视频。
   void startBookingVideo()
   // /open 提交 step2 组播；雷达图与之并行立刻拉取。
-  sessionInitializing.value = true
-  try {
-    await initDialog({ fetchRadar: true })
-  } finally {
-    sessionInitializing.value = false
-  }
+  await initDialog({ fetchRadar: true })
 })
 
 onBeforeUnmount(() => {
@@ -208,8 +157,10 @@ onBeforeUnmount(() => {
 
         <div class="radar-area">
           <RadarImagePanel
-            v-model:line-position="linePosition"
+            :line-position="linePosition"
+            @update:line-position="setLinePosition"
             :image-url="radarImageUrl"
+            :manual-scale="manualScale"
             :darkness="0"
             always-show-line
             @loaded="onRadarImageLoaded"

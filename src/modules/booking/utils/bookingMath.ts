@@ -8,6 +8,14 @@ const BIG_HEIGHT = 3.0
 /** 默认红线相对车头的偏移（米） */
 export const DEFAULT_LINE_OFFSET_M = 1.5
 
+/** 无图时使用固定米制参考尺，不按屏幕像素换算。 */
+export const MANUAL_HEAD_LENGTH_M = 1.8
+export const MANUAL_SCALE_METERS = 6
+
+export function manualHeadLength(position: number): number {
+  return Math.round(Math.max(0.1, Math.min(1, Math.max(0, position)) * MANUAL_SCALE_METERS) * 100) / 100
+}
+
 export function vehicleTypeFromRadarHeight(height: number): 'small' | 'big' {
   return height > BIG_HEIGHT_THRESHOLD ? 'big' : 'small'
 }

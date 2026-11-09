@@ -1,16 +1,20 @@
 /**
  * 预约弹窗控制器 — 对齐 OrderDialog 槽函数与局部状态
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { DEFAULT_HEAD_WIDTH, getBookingApi } from '../api/bookingApi'
 import { useBookingStore } from '../store/useBookingStore'
 import type { BookingAcceptPayload, BookingConfirmConfig, VehicleSizeType } from '../types'
+import type { BookingPort } from '../ports/bookingPort'
 import {
   calcCarHeadLength,
   defaultLinePositionAfterOrigin,
   envelopeFirstNumber,
   linePositionFromVehicleSx,
   PIXEL_TO_METER,
+  MANUAL_HEAD_LENGTH_M,
+  MANUAL_SCALE_METERS,
+  manualHeadLength,
   vehicleTypeFromRadarHeight,
 } from '../utils/bookingMath'
 
@@ -20,17 +24,21 @@ const CONFIRM_TEXT: Record<string, BookingConfirmConfig> = {
   close: { kind: 'close', title: '确认关闭', message: '确定要关闭对话框吗？' },
 }
 
-export function useBookingDialog() {
-  const api = getBookingApi()
+export function useBookingDialog(api: BookingPort = getBookingApi()) {
   const bookingStore = useBookingStore()
 
   const loading = ref(false)
   const submitting = ref(false)
   const radarImageUrl = ref<string | null>(null)
-  /** 雷达拉取已最终失败（重试用尽）— 允许驳回，受理仍需有图 */
-  const radarFetchFailed = ref(false)
   const radarRetryAttempt = ref(0)
-  const linePosition = ref(0.5) // 对齐 ImageLabelWithLine 默认中间
+  const linePosition = ref(MANUAL_HEAD_LENGTH_M / MANUAL_SCALE_METERS)
+  const radarImageReady = ref(false)
+  const manualScale = computed(() => !radarImageReady.value || originalImageWidth.value <= 0)
+  let lineAdjusted = false
+  let suggestedLinePosition = 0.5
+  let requestGeneration = 0
+  let sessionGeneration = 0
+  onScopeDispose(() => { requestGeneration++; sessionGeneration++ })
   const imageEnvelope = ref('')
   const vehicleHeaderEnvelope = ref('')
   const originalImageWidth = ref(0)
@@ -39,7 +47,7 @@ export function useBookingDialog() {
   /** Image-Resolution：米/像素（0.01 → 1px=0.01m） */
   const metersPerPixel = ref(PIXEL_TO_METER)
   const vehicleHeight = ref(3.0)
-  const carHeadLength = ref(DEFAULT_HEAD_WIDTH)
+  const carHeadLength = ref(MANUAL_HEAD_LENGTH_M)
   const xrayEnabled = ref(true)
   const confirmVisible = ref(false)
   const pendingConfirm = ref<BookingConfirmConfig | null>(null)
@@ -79,9 +87,8 @@ export function useBookingDialog() {
   const videoStreamUrl = computed(() => bookingStore.videoStreamUrl)
 
   function updateCarHeadLength() {
-    if (originalImageWidth.value <= 0) {
-      // 无原图宽度时无法按像素换算，只能保持默认
-      carHeadLength.value = DEFAULT_HEAD_WIDTH
+    if (manualScale.value) {
+      carHeadLength.value = manualHeadLength(linePosition.value)
       return
     }
     const next = calcCarHeadLength(
@@ -98,22 +105,57 @@ export function useBookingDialog() {
     carHeadLength.value = next
   }
 
-  watch(linePosition, updateCarHeadLength)
+  function setLinePosition(position: number) {
+    if (submitting.value) return
+    lineAdjusted = true
+    linePosition.value = Math.min(1, Math.max(manualScale.value ? 0.1 / MANUAL_SCALE_METERS : 0, position))
+    updateCarHeadLength()
+  }
+
+  function onRadarImageLoaded() {
+    const selectedLength = carHeadLength.value
+    radarImageReady.value = true
+    if (manualScale.value) return
+    if (lineAdjusted) {
+      const originMeters = vehicleSx.value != null
+        ? Math.max(0, vehicleSx.value)
+        : (envelopeFirstNumber(vehicleHeaderEnvelope.value) - envelopeFirstNumber(imageEnvelope.value)) * metersPerPixel.value
+      const position = (originMeters + selectedLength) / (originalImageWidth.value * metersPerPixel.value)
+      // 图片范围容纳不了人工选择时继续使用手动尺，避免悄悄缩短避让长度。
+      if (position < 0 || position > 1) { onRadarImageError(); return }
+      linePosition.value = position
+      carHeadLength.value = selectedLength
+    } else {
+      linePosition.value = suggestedLinePosition
+      updateCarHeadLength()
+    }
+  }
+
+  function onRadarImageError() {
+    radarImageReady.value = false
+    radarImageUrl.value = null
+    originalImageWidth.value = 0
+    linePosition.value = Math.min(1, carHeadLength.value / MANUAL_SCALE_METERS)
+    errorMessage.value = '雷达图不可用，可按参考刻度估算车头长度后受理'
+  }
 
   async function refreshRadarImage(options?: { maxRetries?: number }) {
+    const generation = ++requestGeneration
     const maxRetries = Math.max(1, options?.maxRetries ?? 2)
     loading.value = true
     errorMessage.value = ''
-    radarFetchFailed.value = false
     radarRetryAttempt.value = 0
 
     let lastErr = ''
     try {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        if (generation !== requestGeneration) return
         radarRetryAttempt.value = attempt
         try {
           const data = await api.fetchRadarImage()
+          if (generation !== requestGeneration) return
           if (data?.imageUrl) {
+            radarImageReady.value = false
             radarImageUrl.value = data.imageUrl
             imageEnvelope.value = data.imageEnvelope || ''
             vehicleHeaderEnvelope.value = data.vehicleHeaderEnvelope || ''
@@ -154,7 +196,7 @@ export function useBookingDialog() {
                 DEFAULT_HEAD_WIDTH,
               )
               if (fromSx != null) {
-                linePosition.value = fromSx
+                suggestedLinePosition = fromSx
               }
             } else {
               const originPx =
@@ -168,16 +210,15 @@ export function useBookingDialog() {
                 metersPerPixel.value,
               )
               if (fromOrigin != null) {
-                linePosition.value = fromOrigin
+                suggestedLinePosition = fromOrigin
               }
             }
-            updateCarHeadLength()
-            radarFetchFailed.value = false
             errorMessage.value = ''
             return
           }
           lastErr = '雷达未返回图像'
         } catch (e) {
+          if (generation !== requestGeneration) return
           lastErr = e instanceof Error ? e.message : '雷达图获取失败'
           console.warn(`[Booking] radar attempt ${attempt}/${maxRetries}:`, lastErr)
         }
@@ -188,13 +229,14 @@ export function useBookingDialog() {
         }
       }
 
-      radarImageUrl.value = null
-      originalImageWidth.value = 0
-      radarFetchFailed.value = true
-      errorMessage.value = `${lastErr || '雷达图获取失败'}（可点刷新重试；无图时仍可驳回）`
+      if (generation !== requestGeneration) return
+      onRadarImageError()
+      errorMessage.value = `${lastErr || '雷达图获取失败'}（可按参考刻度估算后受理，或直接驳回）`
     } finally {
-      loading.value = false
-      radarRetryAttempt.value = 0
+      if (generation === requestGeneration) {
+        loading.value = false
+        radarRetryAttempt.value = 0
+      }
     }
   }
 
@@ -202,10 +244,15 @@ export function useBookingDialog() {
    * open 提交 step2 组播命令；雷达图与 open 并行拉取。
    */
   async function initDialog(opts?: { fetchRadar?: boolean }) {
+    const session = ++sessionGeneration
+    requestGeneration++
     xrayEnabled.value = true
     radarImageUrl.value = null
-    linePosition.value = 0.5
-    carHeadLength.value = DEFAULT_HEAD_WIDTH
+    radarImageReady.value = false
+    lineAdjusted = false
+    suggestedLinePosition = 0.5
+    linePosition.value = MANUAL_HEAD_LENGTH_M / MANUAL_SCALE_METERS
+    carHeadLength.value = MANUAL_HEAD_LENGTH_M
     vehicleHeight.value = 3.0
     vehicleSx.value = null
     metersPerPixel.value = PIXEL_TO_METER
@@ -215,7 +262,6 @@ export function useBookingDialog() {
     vehicleHeaderEnvelope.value = ''
     originalImageWidth.value = 0
     errorMessage.value = ''
-    radarFetchFailed.value = false
 
     // 雷达图立刻拉，与 /open 的组播提交并行
     const radarPromise =
@@ -225,6 +271,7 @@ export function useBookingDialog() {
 
     try {
       const openResult = await api.openDialog()
+      if (session !== sessionGeneration) return
       if (openResult.videoStreamUrl) {
         bookingStore.setVideoStreamUrl(openResult.videoStreamUrl)
       }
@@ -235,7 +282,7 @@ export function useBookingDialog() {
       console.warn('[BookingDialog] openDialog 失败:', e)
     }
 
-    // 不等待雷达图；图仍在 loading 时由 canAccept 卡住受理
+    // 初始化、视频和雷达均不阻塞操作员受理或驳回。
     void radarPromise
   }
 
@@ -263,7 +310,7 @@ export function useBookingDialog() {
       vehicleType: vehicleType.value,
       xrayEnabled: xrayEnabled.value,
       linePosition: linePosition.value,
-      radarHeadImageUrl: radarImageUrl.value || undefined,
+      radarHeadImageUrl: radarImageReady.value ? radarImageUrl.value || undefined : undefined,
     }
   }
 
@@ -278,15 +325,19 @@ export function useBookingDialog() {
     const kind = pendingConfirm.value?.kind
     confirmVisible.value = false
     pendingConfirm.value = null
-    if (!kind) return null
+    if (!kind || submitting.value) return null
 
     submitting.value = true
+    const payload = buildAcceptPayload()
+    requestGeneration++
+    sessionGeneration++
+    loading.value = false
     try {
-      await api.stopVideoSession()
+      // 相机清理不阻塞业务决定；payload在清理和网络等待前固定。
+      void api.stopVideoSession().catch((e) => console.warn('[Booking] stop-video:', e))
       bookingStore.setVideoStreamUrl(null)
 
       if (kind === 'accept') {
-        const payload = buildAcceptPayload()
         await api.acceptBooking(payload)
         bookingStore.applyAccept(payload)
         // 出图由 flask 受理后的占位/硬件拉图 + WS image_ready 负责，不再调 mock_back
@@ -308,7 +359,10 @@ export function useBookingDialog() {
     loading,
     submitting,
     radarImageUrl,
-    radarFetchFailed,
+    manualScale,
+    setLinePosition,
+    onRadarImageLoaded,
+    onRadarImageError,
     linePosition,
     vehicleHeight,
     carHeadLength,

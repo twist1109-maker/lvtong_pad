@@ -4,12 +4,14 @@
  * 面板透明无边框，对话框绿渐变透过
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { MANUAL_SCALE_METERS } from '../utils/bookingMath'
 
 const props = defineProps<{
   imageUrl?: string | null
   linePosition: number
   darkness?: number
   alwaysShowLine?: boolean
+  manualScale?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -29,7 +31,7 @@ let observer: ResizeObserver | undefined
 const stageStyle = computed(() => {
   const image = naturalSize.value
   const panel = panelSize.value
-  if (!image.width || !image.height || !panel.width || !panel.height) return {}
+  if (props.manualScale || !image.width || !image.height || !panel.width || !panel.height) return {}
   const scale = Math.min(panel.width / image.width, panel.height / image.height)
   return { width: `${image.width * scale}px`, height: `${image.height * scale}px` }
 })
@@ -112,13 +114,21 @@ function onImageError() {
     <div ref="stageRef" class="radar-stage" :style="stageStyle">
     <img
       v-if="imageUrl"
+      v-show="!manualScale"
       :src="imageUrl"
       class="radar-image"
       alt="雷达来车图"
       @load="onImageLoad"
       @error="onImageError"
     />
-    <span v-else class="radar-placeholder">雷达测量来车信息区域</span>
+    <span v-if="manualScale" class="radar-placeholder">无雷达图，可拖动红线估算车头长度</span>
+    <span v-else-if="!imageUrl" class="radar-placeholder">雷达测量来车信息区域</span>
+
+    <div v-if="manualScale" class="manual-ruler" aria-label="车头长度参考刻度，单位米">
+      <span v-for="meter in MANUAL_SCALE_METERS + 1" :key="meter" class="ruler-tick" :style="{ left: `${(meter - 1) / MANUAL_SCALE_METERS * 100}%` }">
+        <span>{{ meter - 1 }}m</span>
+      </span>
+    </div>
 
     <template v-if="showLine">
       <div
@@ -192,6 +202,25 @@ function onImageError() {
   height: 100%;
   background: #000;
   pointer-events: none;
+}
+
+.manual-ruler {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  height: 22px;
+  border-top: 1px solid #657c77;
+  pointer-events: none;
+}
+.ruler-tick {
+  position: absolute;
+  top: -1px;
+  height: 8px;
+  border-left: 1px solid #657c77;
+  span { position: absolute; top: 9px; transform: translateX(-50%); color: #415e56; font-size: 12px; white-space: nowrap; }
+  &:first-child span { transform: none; }
+  &:last-child span { transform: translateX(-100%); }
 }
 
 /* 对齐 ImageLabelWithLine：2px 红线 + 半径 5 白边圆点 */
