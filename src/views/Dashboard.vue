@@ -1703,6 +1703,7 @@ function doReset() {
   licensePaths.value = { license: '', licenseGc: '', licenseStitched: '' }
   weightRangeHint.value = ''
   aiLicenseCropLastKey = ''
+  bodyView.value = 'body'
   bodyImageUrls.value = { body: '', top: '', side: '' }
   bodyProjectionGeneration++
   bodyRadarFetching.value = { top: false, side: false }
@@ -1713,6 +1714,7 @@ function doReset() {
   laneOccupied.value = false
   gateReleased.value = false
   radarObjectCount.value = 0
+  xrayView.value = '200'
   xrayImageUrls.value = { '200': '', '160': '', mosaic: '' }
   liveCropPreviewUrl.value = ''
   resetXrayProcessState()
