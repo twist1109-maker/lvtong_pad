@@ -10,6 +10,7 @@ createApp(defineComponent({
       h('div', { id: 'state' }, talk.state.value),
       h('div', { id: 'hint' }, talk.hint.value),
       h('pre', { id: 'stats' }, JSON.stringify(talk.stats.value)),
+      h('pre', { id: 'diagnostics' }, JSON.stringify(talk.diagnostics.value)),
     ])
   },
 })).mount('#app')

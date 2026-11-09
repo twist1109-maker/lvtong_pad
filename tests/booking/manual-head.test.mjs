@@ -128,3 +128,31 @@ test('刷新返回相同图片URL时无需再次load事件，保留人工长度�
   assert.equal(d.linePosition.value, .4)
   scope.stop()
 })
+
+test('裁切雷达图以图片内车头起点计算，不再次减包络的全局起点', async () => {
+  const cropped = { ...image, originalImageWidth: 800, originalImageHeight: 500,
+    imageEnvelope: '4,0,8,5', vehicleSx: 5.24, vehicleSourceSx: 9.24,
+    imageOriginMeters: 4, contentOriginX: 524, vehicleHeaderEnvelope: '524,0' }
+  const { dialog: d, scope } = fixture({ fetchRadarImage: async () => cropped })
+  await d.initDialog(); d.onRadarImageLoaded()
+  assert.ok(Math.abs(d.carHeadLength.value - 1.5) < 1e-8)
+  for (const length of [.03, .5, 1, 2]) {
+    d.setLinePosition((5.24 + length) / 8)
+    assert.ok(Math.abs(d.carHeadLength.value - length) < 1e-8)
+  }
+  scope.stop()
+})
+
+test('没有SX时统一使用后端内容起点，默认红线、拖动与保留人工长度同一原点', async () => {
+  const cropped = { ...image, vehicleSx: null, contentOriginX: 100,
+    imageEnvelope: '4,0,10,3', vehicleHeaderEnvelope: '100,0' }
+  const { dialog: d, scope } = fixture({ fetchRadarImage: async () => cropped })
+  await d.initDialog(); d.onRadarImageLoaded()
+  assert.equal(d.carHeadLength.value, 1.5)
+  d.setLinePosition(.4)
+  assert.equal(d.carHeadLength.value, 3)
+  await d.refreshRadarImage()
+  assert.equal(d.carHeadLength.value, 3)
+  assert.equal(d.linePosition.value, .4)
+  scope.stop()
+})

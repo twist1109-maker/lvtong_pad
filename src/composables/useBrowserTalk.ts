@@ -8,6 +8,7 @@ export function useBrowserTalk() {
   const error = ref('')
   const speakerMuted = ref(false)
   const stats = ref({ sentBytes: 0, receivedBytes: 0, droppedFrames: 0 })
+  const diagnostics = ref<{ capture?: MediaTrackSettings; microphone?: { sampleRate: number; rmsDb: number; peak: number; clippedFraction: number }; uplinkDroppedFrames: number }>({ uplinkDroppedFrames: 0 })
   const talking = computed(() => state.value === 'talking')
   const busy = computed(() => state.value === 'connecting')
   const hint = computed(() => error.value || (busy.value ? '正在连接对讲…' : talking.value ? '实时对讲中' : ''))
@@ -57,6 +58,7 @@ export function useBrowserTalk() {
       if (!token) throw new Error('请先登录再开启对讲')
       state.value = 'connecting'
       stats.value = { sentBytes: 0, receivedBytes: 0, droppedFrames: 0 }
+      diagnostics.value = { uplinkDroppedFrames: 0 }
       const ac = new AudioContext({ latencyHint: 'interactive' })
       context = ac
       // Resume directly from the user's click, before async permission/network operations.
@@ -66,6 +68,7 @@ export function useBrowserTalk() {
       }, video: false })
       if (!active()) { stream.getTracks().forEach(track => track.stop()); return }
       mic = stream
+      diagnostics.value.capture = stream.getAudioTracks()[0]?.getSettings()
       stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
         if (active()) stop('麦克风已断开，请重新连接')
       }))
@@ -86,7 +89,10 @@ export function useBrowserTalk() {
       deadline = setTimeout(() => { if (active()) stop('连接对讲超时，请检查相机后重试') }, 20000)
       let pending = 0
       node.port.onmessage = ({ data }) => {
-        if (!active() || !talking.value || !client.connected || !data.audio || pending >= 24) return
+        if (!active()) return
+        if (data.microphone) diagnostics.value.microphone = data.microphone
+        if (!talking.value || !client.connected || !data.audio) return
+        if (pending >= 24) { diagnostics.value.uplinkDroppedFrames++; return }
         pending++
         client.timeout(2000).emit('audio', data.audio, (err: Error | null, result?: { ok: boolean; error?: string }) => {
           pending--
@@ -139,5 +145,5 @@ export function useBrowserTalk() {
   function pageHide() { stop() }
   window.addEventListener('pagehide', pageHide)
   onBeforeUnmount(() => { window.removeEventListener('pagehide', pageHide); stop() })
-  return { state, error, stats, talking, busy, hint, speakerMuted, start, stop, toggle, toggleSpeaker }
+  return { state, error, stats, diagnostics, talking, busy, hint, speakerMuted, start, stop, toggle, toggleSpeaker }
 }

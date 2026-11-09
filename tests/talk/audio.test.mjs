@@ -26,3 +26,16 @@ test('fractional resampling across 128-sample quanta preserves timing and DC lev
     assert.ok(output.every(v => Math.abs(v-.25)<1e-6))
   }
 })
+
+test('microphone downsampling preserves speech and rejects noise folding into speech', () => {
+  for (const rate of [44100, 48000]) {
+    for (const [hz, minDb, maxDb] of [[300, -1, .1], [1000, -1, .1], [3000, -3, .1], [5000, -150, -55], [7000, -150, -55], [11000, -150, -55]]) {
+      const resampler = new VoiceResampler(rate), output = []
+      for (let n = 0; n < rate; n += 128) resampler.push(Float32Array.from({ length: Math.min(128, rate - n) },
+        (_, i) => .5 * Math.sin(2 * Math.PI * hz * (n + i) / rate)), v => output.push(v))
+      const steady = output.slice(800)
+      const gainDb = 20 * Math.log10(Math.sqrt(steady.reduce((s, x) => s + x * x, 0) / steady.length) / (.5 / Math.sqrt(2)))
+      assert.ok(gainDb > minDb && gainDb < maxDb, `${rate}Hz input tone ${hz}Hz: ${gainDb.toFixed(2)}dB`)
+    }
+  }
+})

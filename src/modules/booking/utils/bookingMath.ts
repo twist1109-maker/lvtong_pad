@@ -125,7 +125,7 @@ export function calcCarHeadLength(
   imageEnvelope: string,
   vehicleHeaderEnvelope: string,
   defaultWidth: number,
-  opts?: { vehicleSx?: number; metersPerPixel?: number },
+  opts?: { vehicleSx?: number; metersPerPixel?: number; contentOriginX?: number },
 ): number {
   if (originalImageWidth <= 0) return defaultWidth
 
@@ -144,7 +144,8 @@ export function calcCarHeadLength(
   const linePx = linePosition * originalImageWidth
   const iw = envelopeFirstNumber(imageEnvelope)
   const vw = envelopeFirstNumber(vehicleHeaderEnvelope)
-  const originPx = vw - iw
+  const originPx = opts?.contentOriginX != null && Number.isFinite(opts.contentOriginX)
+    ? opts.contentOriginX : vw - iw
   const rDistance = (linePx - originPx) * mpp
 
   if (!Number.isFinite(rDistance)) return defaultWidth

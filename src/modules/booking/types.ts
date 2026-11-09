@@ -22,8 +22,11 @@ export interface RadarImageResponse {
   vehicleHeaderEnvelope: string
   /** Vehicle-Height（米） */
   vehicleHeight: number
-  /** Vehicle-SX：车头距图片起始位置（米）；null/缺省表示未返回 */
+  /** 后端已扣除图像起点的 Vehicle-SX：车头在图片内的位置（米）。 */
   vehicleSx?: number | null
+  /** 中间件原始车头 X 和图片左起点，用于核查标定。 */
+  vehicleSourceSx?: number | null
+  imageOriginMeters?: number
   originalImageWidth: number
   originalImageHeight: number
   /** 车头像素起点（由 SX/resolution 推算，或内容最左列） */

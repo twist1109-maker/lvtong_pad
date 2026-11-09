@@ -57,11 +57,6 @@ const controlSwitches: SwitchItem[] = [
   { key: 'yellowlight', field: 'yellowlight', label: '黄灯', tipOn: '黄灯打开 ?', tipOff: '黄灯关闭 ?' },
   { key: 'greenlight', field: 'greenlight', label: '绿灯', tipOn: '绿灯打开 ?', tipOff: '绿灯关闭 ?' },
   { key: 'filllight', field: 'filllight', label: '补光灯', tipOn: '补光灯打开 ?', tipOff: '补光灯关闭 ?' },
-  { key: 'xraygate160', field: 'xraygate160', label: '160光闸', tipOn: '160光闸打开 ?', tipOff: '160光闸关闭 ?' },
-  { key: 'interlock160', field: 'interlock160', label: '160InterLock', tipOn: '160InterLock打开 ?', tipOff: '160InterLock关闭 ?' },
-  { key: 'xraygate200', field: 'xraygate200', label: '200光闸', tipOn: '200光闸打开 ?', tipOff: '200光闸关闭 ?' },
-  // Qt 原文确认语为「2000InterLock…」
-  { key: 'interlock200', field: 'interlock200', label: '200InterLock', tipOn: '2000InterLock打开 ?', tipOff: '2000InterLock关闭 ?' },
   { key: 'soundalarm', field: 'soundalarm', label: '声音报警', tipOn: '声音报警打开 ?', tipOff: '声音报警关闭 ?' },
 ]
 
@@ -74,10 +69,6 @@ const states = ref<Record<string, boolean>>({
   yellowlight: false,
   greenlight: false,
   filllight: false,
-  xraygate160: false,
-  interlock160: false,
-  xraygate200: false,
-  interlock200: false,
   soundalarm: false,
 })
 
@@ -90,11 +81,7 @@ function applyStatus(d: Record<string, unknown>) {
   states.value.greenlight = lights.green
   states.value.filllight = lights.fillLight
   states.value.soundalarm = !!(d.soundalarmCmd ?? d.soundalarm)
-  states.value.interlock160 = !!(d.interlock160Cmd ?? d.interlock160)
-  states.value.interlock200 = !!(d.interlock200Cmd ?? d.interlock200)
   states.value.urgentstop = !!(d.urgentStopStatus ?? d.urgentstop ?? d.urgentStopCmd)
-  states.value.xraygate200 = !!(d.lightGate200Status ?? d.xraygate200 ?? d.xrayGate200Cmd)
-  states.value.xraygate160 = !!(d.lightGate160Status ?? d.xraygate160 ?? d.xrayGate160Cmd)
 }
 
 function onWsPlcStatus(msg: { data?: unknown }) {

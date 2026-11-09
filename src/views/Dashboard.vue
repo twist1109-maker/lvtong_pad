@@ -84,6 +84,9 @@ const showDeviceStatus = ref(false)
 /** 主页闸机图标 — 对齐 GateUIController */
 const gateOnline = ref(false)
 const gateOpen = ref(false)
+const gatePreviewOpen = ref<boolean | null>(null)
+const gateDisplayOpen = computed(() => gatePreviewOpen.value ?? gateOpen.value)
+let gatePreviewTimer: ReturnType<typeof setTimeout> | undefined
 const gateBusy = ref(false)
 let gateStatusTimer: ReturnType<typeof setInterval> | null = null
 /** 组播 XRSUP/XRSDOWN（或旧 XRAY200/160）→ 底栏光机读数 */
@@ -1622,17 +1625,23 @@ async function onGateIconClick() {
     void refreshGateStatus()
     return
   }
+  const targetOpen = !gateDisplayOpen.value
+  clearTimeout(gatePreviewTimer)
+  gatePreviewOpen.value = targetOpen
   gateBusy.value = true
   try {
-    const res = await controlGateApi('toggle')
+    // 以操作员看到的目标下发明确动作，避免快速再次点击时按旧反馈反向 toggle。
+    const res = await controlGateApi(targetOpen ? 'open' : 'close')
     if (res.code === 0) {
       const d = res.data
-      if (d && typeof d.gateOpen === 'boolean') {
+      if (d?.confirmed && typeof d.gateOpen === 'boolean') {
         gateOpen.value = d.gateOpen
         gateOnline.value = true
-      } else {
-        await refreshGateStatus()
       }
+      gatePreviewTimer = setTimeout(() => {
+        gatePreviewOpen.value = null
+        void refreshGateStatus()
+      }, 1000)
       if (d && d.confirmed === false && d.sent) {
         console.warn(
           '[gate]',
@@ -1644,10 +1653,12 @@ async function onGateIconClick() {
         console.info('[gate]', res.message)
       }
     } else {
+      gatePreviewOpen.value = null
       console.warn('[gate]', res.message || '栏杆控制失败')
       await refreshGateStatus()
     }
   } catch (e) {
+    gatePreviewOpen.value = null
     console.warn('[gate]', e instanceof Error ? e.message : '栏杆控制失败')
     await refreshGateStatus()
   } finally {
@@ -2527,6 +2538,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  clearTimeout(gatePreviewTimer)
   document.removeEventListener('click', onXrayDocClick)
   window.clearTimeout(xrayApplyTimer)
   if (gateStatusTimer) {
@@ -2678,7 +2690,7 @@ const anyDialogOpen = computed(
             :booking-pending="bookingStore.btnPrebookPending"
             :distance="radarDistance"
             :gate-online="gateOnline"
-            :gate-open="gateOpen"
+            :gate-open="gateDisplayOpen"
             :xray-phase="xrayMachinePhase"
             :xray-bits="plcXrayBits"
             :signal-lights="plcSignalLights"
