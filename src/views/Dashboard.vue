@@ -131,9 +131,10 @@ const deviceAnchor = ref<{ left: number; top: number } | null>(null)
 /** 对齐 btn_webservice / btn_setting 在线图标 */
 const aiOnline = ref(false)
 const devicesOnline = ref(false)
+/** 小车位置为实时遥测，不随受理、驳回、提交或重置业务状态清空。 */
+const radarDistance = ref(0)
 const workflow = ref({
   bookingActive: false,
-  distance: 0,
   /** 对齐 Qt m_checkstep：0 待机 1 预约等待 2 放行中 3 检测中 4 采集完成 6 已离开 */
   checkStep: 0,
   /** 当前检测步骤文字提示（来自 WS detection_step message） */
@@ -2057,7 +2058,7 @@ function setupWS() {
   let radarLogN = 0
   let pendingRadarDistance: number | null = null
   let radarRaf = 0
-  wsStore.subscribe('radar_distance', (msg) => {
+  const unsubscribeRadar = wsStore.subscribe('radar_distance', (msg) => {
     const data = msg.data as {
       distance?: number
       mode?: number
@@ -2074,7 +2075,7 @@ function setupWS() {
       radarRaf = requestAnimationFrame(() => {
         radarRaf = 0
         if (pendingRadarDistance != null) {
-          workflow.value.distance = pendingRadarDistance
+          radarDistance.value = pendingRadarDistance
           pendingRadarDistance = null
         }
       })
@@ -2083,6 +2084,10 @@ function setupWS() {
     if (radarLogN === 1 || radarLogN % 20 === 0) {
       console.info(`[WS] radar_distance #${radarLogN}: ${d}m mode=${data.mode ?? '-'}`)
     }
+  })
+  onUnmounted(() => {
+    unsubscribeRadar()
+    if (radarRaf) cancelAnimationFrame(radarRaf)
   })
 
   wsStore.subscribe('device_status', (msg) => {
@@ -2669,7 +2674,7 @@ const anyDialogOpen = computed(
           <BottomWorkflowPanel
             :booking-active="bookingStore.bookingActive"
             :booking-pending="bookingStore.btnPrebookPending"
-            :distance="workflow.distance"
+            :distance="radarDistance"
             :gate-online="gateOnline"
             :gate-open="gateOpen"
             :xray-phase="xrayMachinePhase"

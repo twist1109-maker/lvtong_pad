@@ -12,10 +12,16 @@ import LicensePlateEdit from '../../src/components/LicensePlateEdit.vue'
 import AgriculturalSelect from '../../src/components/AgriculturalSelect.vue'
 import { useAuthStore } from '../../src/stores/useAuthStore'
 import { useBookingStore } from '../../src/modules/booking/store/useBookingStore'
+import { useWsStore } from '../../src/stores/useWsStore'
+import { appConfig } from '../../src/config/env'
 import '../../src/styles/global.scss'
 import '../../src/styles/fitted-screen.scss'
 
 const fixtureOptions = new URLSearchParams(location.search)
+if (fixtureOptions.get('radarSync') === '1') {
+  // 仅连接本机隔离Socket.IO样例，生产WebSocket与页面订阅照常运行。
+  Object.assign(appConfig, { useMock: false, wsUrl: 'http://127.0.0.1:5187' })
+}
 const captureBlocked = ref(fixtureOptions.get('captureBlocked') === '1')
 if (fixtureOptions.get('detector') === 'absent') {
   Object.defineProperty(globalThis, 'BarcodeDetector', { configurable: true, value: undefined })
@@ -105,7 +111,21 @@ const captureGuardFixture = defineComponent({
     }, captureBlocked.value ? '模拟解除占用' : '模拟车道占用'),
   ],
 })
-const app = createApp(fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
+const radarSyncFixture = defineComponent({
+  setup: () => () => [
+    h(App),
+    h('div', { style: 'position:fixed;top:0;right:0;z-index:20000;background:#fff;color:#000' }, [
+      ...[35, 28, 20, 0].map(distance => h('button', {
+        onClick: () => useWsStore().send({ type: 'fixture_radar', data: { distance } }),
+      }, `模拟雷达${distance}米`)),
+      h('button', { onClick: () => useBookingStore().openDialog() }, '模拟预约窗口'),
+      ...['受理', '驳回', '重置'].map(phase => h('button', {
+        onClick: () => useWsStore().send({ type: 'fixture_phase', data: { phase } }),
+      }, `模拟${phase}`)),
+    ]),
+  ],
+})
+const app = createApp(fixtureOptions.has('radarSync') ? radarSyncFixture : fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
 app.use(pinia)
 app.use(router)
 useAuthStore().user = { username: 'layout-test', realName: '布局测试', phone: '', role: 1 }

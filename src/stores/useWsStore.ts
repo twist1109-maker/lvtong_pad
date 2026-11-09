@@ -17,6 +17,9 @@ export const useWsStore = defineStore('websocket', () => {
   const lastError = ref<string | null>(null)
   /** 最近一次 plc_status（面板晚开时回放） */
   const lastPlcStatus = ref<Record<string, unknown> | null>(null)
+  /** 雷达位置不属于预约状态；页面晚订阅时仍能恢复最近的实时位置。 */
+  const lastRadarDistance = ref<WsEnvelope | null>(null)
+  let lastRadarReceivedAt = 0
 
   const isConnected = computed(() => status.value === 'open')
 
@@ -32,6 +35,10 @@ export const useWsStore = defineStore('websocket', () => {
       },
       onMessage: (payload) => {
         lastMessage.value = payload
+        if (payload?.type === 'radar_distance') {
+          lastRadarDistance.value = payload
+          lastRadarReceivedAt = Date.now()
+        }
         if (
           payload?.type === 'plc_status' &&
           payload.data &&
@@ -66,7 +73,12 @@ export const useWsStore = defineStore('websocket', () => {
   }
 
   function subscribe(type: WsMessageType | string, handler: WsMessageHandler) {
-    return ensureClient().subscribe(type, handler)
+    const unsubscribe = ensureClient().subscribe(type, handler)
+    const radar = lastRadarDistance.value
+    if (type === 'radar_distance' && radar && Date.now() - lastRadarReceivedAt <= 5000) {
+      handler(radar)
+    }
+    return unsubscribe
   }
 
   /** 订阅全部消息（调试用） */
