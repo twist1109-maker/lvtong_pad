@@ -155,6 +155,7 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
           const data = await api.fetchRadarImage()
           if (generation !== requestGeneration) return
           if (data?.imageUrl) {
+            const alreadyDecoded = radarImageReady.value && radarImageUrl.value === data.imageUrl
             radarImageReady.value = false
             radarImageUrl.value = data.imageUrl
             imageEnvelope.value = data.imageEnvelope || ''
@@ -214,6 +215,7 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
               }
             }
             errorMessage.value = ''
+            if (alreadyDecoded) onRadarImageLoaded()
             return
           }
           lastErr = '雷达未返回图像'

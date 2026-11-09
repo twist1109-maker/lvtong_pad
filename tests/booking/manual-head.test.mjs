@@ -116,3 +116,15 @@ test('连续确认不会重复提交，长度在请求前固定', async () => {
   assert.equal((await first).payload.carHeadLength, 1.8)
   scope.stop()
 })
+
+test('刷新返回相同图片URL时无需再次load事件，保留人工长度及真实标定', async () => {
+  const { dialog: d, scope } = fixture({ fetchRadarImage: async () => image })
+  await d.initDialog()
+  d.onRadarImageLoaded()
+  d.setLinePosition(.4)
+  await d.refreshRadarImage()
+  assert.equal(d.manualScale.value, false)
+  assert.equal(d.carHeadLength.value, 3)
+  assert.equal(d.linePosition.value, .4)
+  scope.stop()
+})
