@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 图像采集弹窗 — 1:1 对齐 Qt GetPic/Tail/Top/Goods/Evidence (1400×713)
- * - 默认直接使用平板后置摄像头；可切换网络相机截帧拍照。
- * - 车顶/车头/车尾：WebRTC cam1；预约相机：WebRTC cam4
+ * - 车头/车尾/车顶默认打开对应网络相机，货物默认球机；可手动切换平板相机。
+ * - 车头/车尾/车顶：WebRTC cam2/cam1/cam6；预约相机：WebRTC cam4
  * - 球机：WebRTC cam5；云台由 Flask 后端通过海康 ISAPI 控制
  * - 货物/证据才有「图片数量」+「选中删除」（GetGoods/Evidence）；车头/尾/顶无
  */
@@ -42,6 +42,9 @@ const TITLE_MAP: Record<CaptureKind, string> = {
 }
 
 const DEVICE_CAMERA = '平板相机'
+const DEFAULT_CAMERA: Record<CaptureKind, string> = {
+  head: '车头相机', tail: '车尾相机', top: '车顶相机', goods: '球机', evidence: DEVICE_CAMERA,
+}
 
 const MAX_MAP: Partial<Record<CaptureKind, number>> = {
   goods: 16,
@@ -58,7 +61,7 @@ const maxCount = computed(() => MAX_MAP[props.kind] ?? 1)
 const thumbW = computed(() => (isMulti.value ? 110 : 200))
 const thumbH = 110
 
-const activeCamera = ref<string>(DEVICE_CAMERA)
+const activeCamera = ref<string>(DEFAULT_CAMERA[props.kind])
 /** 对齐 switchToCamera：仅球机显示云台 */
 const showPtz = computed(() => activeCamera.value === '球机')
 const useWhepPreview = computed(() => activeCamera.value !== DEVICE_CAMERA)
@@ -218,12 +221,16 @@ function isCameraDisabled(name: string) {
 }
 
 function syncKind() {
-  activeCamera.value = DEVICE_CAMERA
+  activeCamera.value = DEFAULT_CAMERA[props.kind]
   photos.value = [...(props.initialImages ?? [])].filter(Boolean)
   selectedIndex.value = 0
 }
 
-watch(() => props.kind, syncKind)
+watch(() => props.kind, async () => {
+  stopActivePtz()
+  syncKind()
+  await applyPreviewForCamera(activeCamera.value)
+})
 watch(
   () => props.initialImages,
   (next, prev) => {
@@ -290,7 +297,7 @@ async function selectCamera(name: string) {
   if (prevName === '球机') stopActivePtz()
   activeCamera.value = name
 
-  // 同一路 WHEP（如枪机三 Tab）只改高亮；枪机↔预约需换流
+  // 相同配置的 WHEP 只改高亮；不同地址必须换流。
   if (
     name !== DEVICE_CAMERA && prevName !== DEVICE_CAMERA &&
     name !== prevName &&
@@ -554,6 +561,7 @@ function openPreview() {
               class="cam-tab"
               :class="{ on: activeCamera === cam, disabled: isCameraDisabled(cam) || switchingCamera }"
               :disabled="isCameraDisabled(cam) || switchingCamera"
+              :aria-pressed="activeCamera === cam"
               @click="selectCamera(cam)"
             >
               {{ cam }}

@@ -71,6 +71,23 @@ const states = ref<Record<string, boolean>>({
   filllight: false,
   soundalarm: false,
 })
+// DEVICE反馈始终写入states；操作预览独立保留1秒，避免旧反馈让图标来回闪。
+const previews = ref<Record<string, boolean>>({})
+const displayStates = computed(() => ({ ...states.value, ...previews.value }))
+const previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function clearPreview(key: string) {
+  clearTimeout(previewTimers.get(key))
+  previewTimers.delete(key)
+  delete previews.value[key]
+}
+function previewSwitch(key: string, next: boolean) {
+  clearPreview(key)
+  previews.value[key] = next
+  previewTimers.set(key, setTimeout(() => {
+    clearPreview(key)
+    void refreshPlcStatus()
+  }, 1000))
+}
 
 function applyStatus(d: Record<string, unknown>) {
   plcFeedbackFresh.value = d.fresh !== false
@@ -135,6 +152,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  previewTimers.forEach(timer => clearTimeout(timer))
+  previewTimers.clear()
   unsubRadiometer?.()
   document.removeEventListener('click', onSysMenuDocClick)
   if (statusPollTimer != null) {
@@ -152,13 +171,13 @@ const loadingKey = ref<string | null>(null)
 function onSwitchClick(item: SwitchItem) {
   if (item.readonly) return
   if (confirmVisible.value || errorVisible.value || loadingKey.value) return
-  const next = !states.value[item.field]
+  const next = !displayStates.value[item.field]
   pending = { key: item.key, next }
   confirmMessage.value = next ? (item.tipOn || '') : (item.tipOff || '')
   confirmVisible.value = true
 }
 
-/** 确认开关操作 → 下发后端 API，成功后再切本地图标 */
+/** 确认后立即预览目标状态；1秒后恢复最新DEVICE反馈，发令失败则立即回退。 */
 async function onConfirmYes() {
   confirmVisible.value = false
   if (!pending) return
@@ -168,17 +187,17 @@ async function onConfirmYes() {
 
   if (loadingKey.value) return
   loadingKey.value = key
+  previewSwitch(key, next)
 
   try {
     // POST /api/device/plc-control → { [key]: next }
-    await request('/device/plc-control', {
+    const result = await request('/device/plc-control', {
       method: 'POST',
       body: JSON.stringify({ [key]: next }),
     })
-    // 下发成功 → 切换本地图标
-    states.value[key] = next
+    if (result.code !== 0) throw new Error(result.message || 'PLC 控制指令发送失败')
   } catch (e: any) {
-    // 下发失败 → 保持原状态，弹错误提示
+    clearPreview(key)
     errorMessage.value = e?.message || 'PLC 控制指令发送失败'
     errorVisible.value = true
   } finally {
@@ -271,13 +290,13 @@ const dialogStyle = computed(() => {
             :class="{ 'is-loading': loadingKey === item.key }"
             :title="item.label"
             :disabled="loadingKey !== null"
+            :aria-pressed="displayStates[item.field]"
+            :aria-busy="loadingKey === item.key"
             @click="onSwitchClick(item)"
           >
-            <span v-if="loadingKey === item.key" class="switch-spinner" aria-label="加载中" />
             <img
-              v-else
-              :src="states[item.field] ? '/assets/img/plcctrl_open.png' : '/assets/img/plcctrl_close.png'"
-              :alt="states[item.field] ? '开' : '关'"
+              :src="displayStates[item.field] ? '/assets/img/plcctrl_open.png' : '/assets/img/plcctrl_close.png'"
+              :alt="displayStates[item.field] ? '开' : '关'"
             />
           </button>
         </div>
@@ -551,18 +570,4 @@ const dialogStyle = computed(() => {
   }
 }
 
-/* 加载旋转动画 */
-.switch-spinner {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid #c0c0c0;
-  border-top-color: #0078d7;
-  border-radius: 50%;
-  animation: plc-spin 0.6s linear infinite;
-}
-
-@keyframes plc-spin {
-  to { transform: rotate(360deg); }
-}
 </style>
