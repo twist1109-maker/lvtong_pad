@@ -22,6 +22,9 @@ if (fixtureOptions.get('radarSync') === '1') {
   // 仅连接本机隔离Socket.IO样例，生产WebSocket与页面订阅照常运行。
   Object.assign(appConfig, { useMock: false, wsUrl: 'http://127.0.0.1:5187' })
 }
+if (fixtureOptions.get('bodyCapture') === '1') {
+  Object.assign(appConfig, { useMock: false, wsUrl: 'http://127.0.0.1:5194' })
+}
 const captureBlocked = ref(fixtureOptions.get('captureBlocked') === '1')
 if (fixtureOptions.get('detector') === 'absent') {
   Object.defineProperty(globalThis, 'BarcodeDetector', { configurable: true, value: undefined })
@@ -125,7 +128,13 @@ const radarSyncFixture = defineComponent({
     ]),
   ],
 })
-const app = createApp(fixtureOptions.has('radarSync') ? radarSyncFixture : fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
+const bodyCaptureFixture = defineComponent({
+  setup: () => () => [h(App), h('button', {
+    style: 'position:fixed;top:0;right:0;z-index:20000;padding:8px;background:#fff;color:#000',
+    onClick: () => useWsStore().send({ type: 'fixture_body_images', data: {} }),
+  }, '模拟车身影像')],
+})
+const app = createApp(fixtureOptions.has('bodyCapture') ? bodyCaptureFixture : fixtureOptions.has('radarSync') ? radarSyncFixture : fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
 app.use(pinia)
 app.use(router)
 useAuthStore().user = { username: 'layout-test', realName: '布局测试', phone: '', role: 1 }

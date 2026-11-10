@@ -306,12 +306,22 @@ const BODY_VIEW_LABELS: Record<BodyView, string> = {
   cloud: '3D视图',
 }
 const bodyView = ref<BodyView>('body')
+const bodyCaptureMode = ref(false)
+const bodyCaptureError = ref('')
+const bodyCloudPanelRef = ref<{ ready: boolean } | null>(null)
+const bodyCanCapture = computed(() => bodyView.value === 'body' ? !!bodyPcPanelRef.value?.ready : !!bodyCloudPanelRef.value?.ready)
+function toggleBodyCapture() {
+  bodyCaptureError.value = ''
+  bodyCaptureMode.value = !bodyCaptureMode.value
+}
+function onBodyCaptureError(message: string) { bodyCaptureMode.value = false; bodyCaptureError.value = message }
 const bodyImageUrls = ref<Record<'body' | 'top' | 'side', string>>({
   body: '',
   top: '',
   side: '',
 })
 const bodyImageUrl = computed(() => bodyImageUrls.value.body)
+watch(bodyImageUrl, () => { bodyCaptureMode.value = false; bodyCaptureError.value = '' })
 const bodyViewLabel = computed(() => BODY_VIEW_LABELS[bodyView.value])
 const bodyProjectionMeta = ref({
   top: { source: '', metersPerPixel: .01 },
@@ -392,6 +402,8 @@ async function ensureBodyRadarImage(refresh = false) {
 }
 
 watch(bodyView, (view) => {
+  bodyCaptureMode.value = false
+  bodyCaptureError.value = ''
   if (view === 'cloud') {
     void ensureBodyRadarImage()
   }
@@ -965,7 +977,7 @@ function reconnectLiveVideo() {
 
 /** 框图裁切预览（叠在 WebRTC 视频之上；来自车身/透视框图 → 后端原图裁切） */
 const liveCropPreviewUrl = ref('')
-const bodyPcPanelRef = ref<{ clearBoxes: () => void } | null>(null)
+const bodyPcPanelRef = ref<{ clearBoxes: () => void; ready: boolean } | null>(null)
 const xrayBoxPanelRef = ref<{ clearBoxes: () => void } | null>(null)
 let cropReqSeq = 0
 
@@ -995,6 +1007,7 @@ async function requestOriginalCrop(payload: CropBoxPayload): Promise<string> {
 }
 
 async function onBodyBoxCrop(payload: CropBoxPayload) {
+  bodyCaptureMode.value = false
   xrayBoxPanelRef.value?.clearBoxes()
   const seq = ++cropReqSeq
   try {
@@ -1002,8 +1015,18 @@ async function onBodyBoxCrop(payload: CropBoxPayload) {
     if (seq !== cropReqSeq) return
     liveCropPreviewUrl.value = url
   } catch (e) {
+    if (seq !== cropReqSeq) return
+    bodyCaptureError.value = e instanceof Error ? e.message : '截图失败，请重新框选'
     console.error('[Dashboard] 车身原图裁切失败', e)
   }
+}
+
+function onBody3DScreenshot(image: string) {
+  cropReqSeq++ // invalidate older pending original-image crop requests
+  bodyCaptureMode.value = false
+  bodyPcPanelRef.value?.clearBoxes()
+  xrayBoxPanelRef.value?.clearBoxes()
+  liveCropPreviewUrl.value = image
 }
 
 async function onXrayBoxCrop(payload: CropBoxPayload) {
@@ -1036,6 +1059,8 @@ function onConfirmCropToGoods() {
 
 /** 「×」：清除框图预览 + 车身/透视上的框 */
 function onDeleteCropBoxes() {
+  bodyCaptureMode.value = false
+  bodyCaptureError.value = ''
   cropReqSeq++
   liveCropPreviewUrl.value = ''
   bodyPcPanelRef.value?.clearBoxes()
@@ -1727,7 +1752,7 @@ function doReset() {
   radarObjectCount.value = 0
   xrayView.value = '200'
   xrayImageUrls.value = { '200': '', '160': '', mosaic: '' }
-  liveCropPreviewUrl.value = ''
+  onDeleteCropBoxes()
   resetXrayProcessState()
   aiLoadRateLastKey = ''
   aiLoadRateSeq += 1
@@ -2592,8 +2617,10 @@ const anyDialogOpen = computed(
             <span class="panel-title">车身影像</span>
             <span class="header-spacer" aria-hidden="true" />
             <span v-if="bodyProjectionDemo" class="projection-source">示范数据</span>
+            <span v-if="bodyCaptureError" class="projection-error" :title="bodyCaptureError">{{ bodyCaptureError }}</span>
             <span v-if="bodyView !== 'body' && bodyProjectionError" class="projection-error" :title="bodyProjectionError">拉取失败</span>
             <span class="xray-meta">{{ bodyViewLabel }}：</span>
+            <button type="button" class="body-capture-btn" :class="{ active: bodyCaptureMode }" :disabled="!bodyCanCapture" :aria-pressed="bodyCaptureMode" :title="bodyCanCapture ? '框选当前视图截图' : '暂无可截图画面'" @click="toggleBodyCapture">{{ bodyCaptureMode ? '取消截图' : '截图' }}</button>
             <button v-if="bodyView !== 'body'" type="button" class="header-icon-btn" title="刷新3D视图" aria-label="刷新3D视图" :disabled="bodyRadarFetching.top || bodyRadarFetching.side" @click="ensureBodyRadarImage(true)">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f9182" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 4v7h-7" stroke-linecap="round" stroke-linejoin="round" /></svg>
             </button>
@@ -2603,10 +2630,15 @@ const anyDialogOpen = computed(
           </div>
           <BodyCloud3DPanel
             v-if="bodyView !== 'body'"
+            ref="bodyCloudPanelRef"
+            :capture-mode="bodyCaptureMode"
             :geometry="bodyCloudGeometry"
             :loading="bodyRadarFetching.top || bodyRadarFetching.side"
             :error="bodyProjectionError"
             :sample="bodyProjectionDemo"
+            @screenshot="onBody3DScreenshot"
+            @cancel-capture="bodyCaptureMode = false"
+            @capture-error="onBodyCaptureError"
           />
           <BodyPointCloudPanel
             v-else
@@ -2616,8 +2648,10 @@ const anyDialogOpen = computed(
             :image-url="bodyImageUrl || undefined"
             :source-temp-url="bodyImageUrl || undefined"
             :view="bodyView"
+            :capture-mode="bodyCaptureMode"
             :meters-per-pixel=".01"
             @crop="onBodyBoxCrop"
+            @capture-error="onBodyCaptureError"
           />
         </div>
 
@@ -3243,6 +3277,18 @@ const anyDialogOpen = computed(
 
 .panel-header-body .panel-title {
   margin-right: 0;
+}
+.body-capture-btn {
+  flex-shrink: 0;
+  border: 1px solid #90b5a7;
+  border-radius: 5px;
+  padding: 3px 10px;
+  background: transparent;
+  color: #326c5b;
+  font: inherit;
+  cursor: pointer;
+  &.active { background: #e1f1e9; border-color: #43866e; }
+  &:disabled { cursor: default; opacity: .45; }
 }
 
 .panel-header .panel-title,

@@ -3,8 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { decodeCloudGeometry, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
+import FrameCropSelection from '@/components/FrameCropSelection.vue'
 
-const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; sample?: boolean }>()
+const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; sample?: boolean; captureMode?: boolean }>()
+const emit = defineEmits<{ screenshot: [image: string]; captureError: [message: string]; cancelCapture: [] }>()
+const captureImage = ref('')
 const host = ref<HTMLDivElement | null>(null)
 const renderError = ref('')
 const ready = ref(false)
@@ -61,6 +64,7 @@ function fitToBounds() {
 }
 function resize() {
   if (!renderer || !host.value) return
+  if (captureImage.value && (width !== host.value.clientWidth || height !== host.value.clientHeight)) emit('cancelCapture')
   width = Math.max(1, host.value.clientWidth)
   height = Math.max(1, host.value.clientHeight)
   renderer.setSize(width, height, false)
@@ -151,6 +155,29 @@ function rebuild() {
 function onContextLost(event: Event) {
   event.preventDefault(); contextLost = true; ready.value = false
   renderError.value = '三维显示已中断，请刷新页面重试'
+  emit('cancelCapture')
+}
+function startCapture() {
+  if (!renderer || !ready.value || contextLost) { emit('cancelCapture'); return }
+  try {
+    controls.enabled = false
+    // Render and copy synchronously: the default WebGL buffer is cleared after compositing.
+    render()
+    const canvas = document.createElement('canvas')
+    canvas.width = renderer.domElement.width; canvas.height = renderer.domElement.height
+    const ctx = canvas.getContext('2d')!
+    ctx.drawImage(renderer.domElement, 0, 0)
+    const ratio = canvas.width / width
+    ctx.font = `${14 * ratio}px sans-serif`
+    ctx.fillStyle = '#fff'; ctx.fillRect(8 * ratio, 6 * ratio, Math.min(width - 16, 390) * ratio, 28 * ratio)
+    ctx.fillStyle = '#345a4e'
+    ctx.fillText(axisNames.map((name, i) => `${name} ${measured.value[i].toFixed(3)}m`).join('   '), 14 * ratio, 25 * ratio)
+    if (boundsVisible.value) for (const label of labels.value) {
+      ctx.fillStyle = label.color
+      ctx.fillText(label.text, label.x / 100 * canvas.width, label.y / 100 * canvas.height)
+    }
+    captureImage.value = canvas.toDataURL('image/png')
+  } catch { emit('captureError', '三维截图失败，请刷新视图后重试') }
 }
 onMounted(() => {
   try {
@@ -174,6 +201,12 @@ onMounted(() => {
 watch(() => props.geometry, rebuild)
 watch(ranges, updateBox, { deep: true })
 watch(boundsVisible, () => { if (boxGroup) boxGroup.visible = boundsVisible.value; render() })
+watch(() => props.captureMode, active => {
+  if (active) startCapture()
+  else { captureImage.value = ''; if (controls) controls.enabled = true }
+})
+watch(() => props.geometry, () => { captureImage.value = ''; emit('cancelCapture') })
+defineExpose({ ready })
 onBeforeUnmount(() => {
   observer?.disconnect()
   controls?.removeEventListener('change', render); controls?.dispose()
@@ -207,6 +240,7 @@ onBeforeUnmount(() => {
       </div>
       <small>数值按当前点云范围测量{{ sample ? '（示范数据）' : '' }}</small>
     </div>
+    <FrameCropSelection v-if="captureMode && captureImage" :image="captureImage" :sample="sample" @crop="emit('screenshot', $event)" @cancel="emit('cancelCapture')" @error="emit('captureError', $event)" />
   </div>
 </template>
 

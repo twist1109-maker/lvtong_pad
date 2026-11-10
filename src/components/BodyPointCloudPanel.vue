@@ -19,6 +19,8 @@ const props = defineProps<{
   placeholder?: string
   /** 无图占位文字色调：default 灰 / occupied 红 / waiting 绿 */
   placeholderTone?: 'default' | 'occupied' | 'waiting'
+  /** Undefined keeps the legacy draw-to-crop behavior used by X-ray panels. */
+  captureMode?: boolean
 }>()
 
 export type CropBoxPayload = {
@@ -31,6 +33,7 @@ export type CropBoxPayload = {
 
 const emit = defineEmits<{
   crop: [payload: CropBoxPayload]
+  captureError: [message: string]
 }>()
 
 const PIXEL_TO_METER = 0.01
@@ -69,6 +72,7 @@ const imgRef = ref<HTMLImageElement | null>(null)
 
 const imgW = ref(0)
 const imgH = ref(0)
+const ready = computed(() => imgW.value > 0 && imgH.value > 0)
 const index = ref<PointIndex | null>(null)
 const linePosition = ref(0.35)
 const draggingLine = ref(false)
@@ -342,6 +346,7 @@ function isNearLine(clientX: number) {
 async function emitCrop(box: Box) {
   const sourceTempUrl = (props.sourceTempUrl || props.imageUrl || '').trim()
   if (!sourceTempUrl.startsWith('/api/temp-images/')) {
+    emit('captureError', '原图不可用，请刷新影像后重试')
     console.error('[BodyPointCloudPanel] sourceTempUrl 不是 temp 预览，无法原图裁切:', sourceTempUrl)
     return
   }
@@ -397,6 +402,8 @@ function onPointerDown(e: PointerEvent) {
     return
   }
 
+  if (props.captureMode === false) return
+
   // 开始画新框：影像上旧框先消失；右侧预览等松手裁切成功后再更新（不在此处 emit）
   boxes.value = []
   selectedBoxId.value = null
@@ -449,6 +456,12 @@ async function onPointerUp(e: PointerEvent) {
   }
 }
 
+function onPointerCancel(e: PointerEvent) {
+  drawingBox.value = draggingLine.value = false
+  draftStart.value = draftEnd.value = null
+  if (stageRef.value?.hasPointerCapture(e.pointerId)) stageRef.value.releasePointerCapture(e.pointerId)
+}
+
 function onSelectBox(id: number, e: PointerEvent) {
   e.stopPropagation()
   e.preventDefault()
@@ -456,6 +469,10 @@ function onSelectBox(id: number, e: PointerEvent) {
 }
 
 watch(() => props.metersPerPixel, updateMeasure)
+watch(() => props.captureMode, () => {
+  drawingBox.value = false
+  draftStart.value = draftEnd.value = null
+})
 watch(
   () => [props.imageUrl, props.view] as const,
   async () => {
@@ -485,6 +502,7 @@ onUnmounted(() => {
 
 defineExpose({
   clearBoxes,
+  ready,
 })
 </script>
 
@@ -502,14 +520,15 @@ defineExpose({
       :class="{
         'is-dragging': draggingLine,
         'is-drawing-box': drawingBox,
+        'capture-mode': captureMode,
       }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
+      @pointercancel="onPointerCancel"
     >
       <div ref="fitRef" class="fit">
-        <img ref="imgRef" :src="imageUrl" class="body-image" alt="" draggable="false" @load="onImgLoad" />
+        <img ref="imgRef" :src="imageUrl" class="body-image" alt="" draggable="false" @load="onImgLoad" @error="resetState(); emit('captureError', '影像加载失败，请刷新后重试')" />
 
         <template v-if="canMeasure">
           <div class="vline" :style="{ left: `${linePosition * 100}%` }">
@@ -556,6 +575,7 @@ defineExpose({
           <div v-if="draftStyle" class="box-rect is-draft" :style="draftStyle" />
         </div>
       </div>
+      <span v-if="captureMode" class="capture-hint">拖动框选截图，松开后放入右侧实时视频</span>
     </div>
   </div>
 </template>
@@ -576,6 +596,8 @@ defineExpose({
   overflow: hidden;
   position: relative;
 }
+.capture-mode { cursor: crosshair; }
+.capture-hint { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); padding: 5px 9px; background: #ffffffed; color: #42594f; white-space: nowrap; font-size: 13px; pointer-events: none; }
 
 .body-pc-placeholder {
   font-family: 'SimSun', '新宋体', serif;
