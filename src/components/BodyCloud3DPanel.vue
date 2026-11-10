@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { decodeCloudGeometry, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
 import FrameCropSelection from '@/components/FrameCropSelection.vue'
 
-const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; sample?: boolean; captureMode?: boolean }>()
+const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; captureMode?: boolean }>()
 const emit = defineEmits<{ screenshot: [image: string]; captureError: [message: string]; cancelCapture: [] }>()
 const captureImage = ref('')
 const host = ref<HTMLDivElement | null>(null)
@@ -121,6 +121,7 @@ function setRange(axis: number, end: number, event: Event) {
 }
 function rebuild() {
   if (!renderer) return
+  const wasReady = ready.value
   ready.value = false
   disposeGroup(cloudGroup); disposeGroup(boxGroup)
   cloudGroup = undefined; boxGroup = undefined
@@ -144,9 +145,10 @@ function rebuild() {
     cloudGroup = new THREE.Group()
     cloudGroup.add(new THREE.Points(geometry, new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true })))
     scene.add(cloudGroup)
-    resetMeasure()
+    if (!wasReady) resetMeasure()
     ready.value = true
-    updateBox(); resetView()
+    updateBox()
+    if (!wasReady) resetView()
   } catch (error) {
     renderError.value = error instanceof Error ? error.message : '三维点云加载失败'
     render()
@@ -238,9 +240,9 @@ onBeforeUnmount(() => {
         <span :style="{ color: axisColors[axis] }">{{ name }}</span>
         <input v-for="end in [0, 1]" :key="end" type="range" min="0" max="100" step="0.1" :value="ranges[axis][end]" :aria-label="`${name}${end === 0 ? '起点' : '终点'}`" @input="setRange(axis, end, $event)" />
       </div>
-      <small>数值按当前点云范围测量{{ sample ? '（示范数据）' : '' }}</small>
+      <small>数值按当前点云范围测量</small>
     </div>
-    <FrameCropSelection v-if="captureMode && captureImage" :image="captureImage" :sample="sample" @crop="emit('screenshot', $event)" @cancel="emit('cancelCapture')" @error="emit('captureError', $event)" />
+    <FrameCropSelection v-if="captureMode && captureImage" :image="captureImage" @crop="emit('screenshot', $event)" @cancel="emit('cancelCapture')" @error="emit('captureError', $event)" />
   </div>
 </template>
 

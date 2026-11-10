@@ -129,10 +129,10 @@ const radarSyncFixture = defineComponent({
   ],
 })
 const bodyCaptureFixture = defineComponent({
-  setup: () => () => [h(App), h('button', {
+  setup: () => () => [h(App), h('div', {
     style: 'position:fixed;top:0;right:0;z-index:20000;padding:8px;background:#fff;color:#000',
-    onClick: () => useWsStore().send({ type: 'fixture_body_images', data: {} }),
-  }, '模拟车身影像')],
+  }, [h('button', { onClick: () => useWsStore().send({ type: 'fixture_body_images', data: {} }) }, '模拟车身影像'),
+      h('button', { onClick: () => useWsStore().send({ type: 'fixture_body_reset', data: {} }) }, '模拟采集重置')])],
 })
 const app = createApp(fixtureOptions.has('bodyCapture') ? bodyCaptureFixture : fixtureOptions.has('radarSync') ? radarSyncFixture : fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)
 app.use(pinia)

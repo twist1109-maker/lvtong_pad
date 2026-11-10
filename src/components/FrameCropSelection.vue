@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { selectionPoint, selectionPixels, type SelectionPoint } from '@/modules/bodyRadar/screenshot'
 
-const props = defineProps<{ image: string; sample?: boolean }>()
+defineProps<{ image: string }>()
 const emit = defineEmits<{ crop: [image: string]; cancel: []; error: [message: string] }>()
 const host = ref<HTMLElement | null>(null)
 const imageRef = ref<HTMLImageElement | null>(null)
@@ -47,11 +47,6 @@ function up(event: PointerEvent) {
     canvas.width = crop.width; canvas.height = crop.height
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(source, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
-    if (props.sample) {
-      ctx.font = `${Math.max(12, Math.min(24, crop.width / 8))}px sans-serif`
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, Math.min(crop.width, 150), 32)
-      ctx.fillStyle = '#9a4e12'; ctx.fillText('示范数据', 5, 24)
-    }
     emit('crop', canvas.toDataURL('image/png'))
   } catch { emit('error', '截图失败，请重新框选') }
 }

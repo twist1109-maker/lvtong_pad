@@ -157,14 +157,21 @@ export function controlGateApi(action: 'open' | 'close' | 'toggle') {
   })
 }
 
-/** POST /api/device/body-radar-image — 切换显示车顶/车侧雷达图时按需拉图 */
+/** 本轮真实 LAZ 缓存；读取不会开启设备或额外拉取中间件。 */
+export interface BodyRadarCaptureStatus {
+  generation: number
+  state: 'idle' | 'armed' | 'capturing' | 'polling' | 'finished' | 'timeout' | 'stopped'
+  frame: number
+  error: string
+  hasData: boolean
+}
 export interface BodyRadarProjectionResult {
   imageUrl: string
   view: string
   slot?: string
-  source?: 'sample' | 'live'
+  source?: 'live'
   sourceLabel?: string
-  fallbackReason?: string
+  capture?: BodyRadarCaptureStatus
   geometry?: import('@/modules/bodyRadar/cloudGeometry').CloudGeometryPayload
   views?: Record<'top' | 'side', { imageUrl: string; metersPerPixel: number; coordinateAxes: string }>
 }

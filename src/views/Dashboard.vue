@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
 import { getCurrentUserApi } from '@/api/auth'
-import { controlGateApi, fetchBodyRadarImageApi, getGateStatusApi } from '@/api/device'
+import { controlGateApi, fetchBodyRadarImageApi, getGateStatusApi, type BodyRadarCaptureStatus } from '@/api/device'
 
 import AppHeader from '@/components/AppHeader.vue'
 import type { ToolAnchor } from '@/components/AppHeader.vue'
@@ -329,10 +329,21 @@ const bodyProjectionMeta = ref({
 })
 const bodyProjectionError = ref('')
 const bodyCloudGeometry = shallowRef<CloudGeometryPayload | null>(null)
-const bodyCloudSource = ref('')
-const bodyProjectionDemo = computed(() => bodyView.value !== 'body' && bodyCloudSource.value === 'sample')
+const bodyRadarCapture = ref<BodyRadarCaptureStatus | null>(null)
+const bodyRadarStatusText = computed(() => {
+  const capture = bodyRadarCapture.value
+  if (capture?.error) return capture.error
+  switch (capture?.state) {
+    case 'armed': return '等待放行开启几何采集'
+    case 'capturing': return '几何采集已开启，等待车辆驶入'
+    case 'polling': return capture.hasData ? '正在采集三维点云' : '正在采集，等待有效点云'
+    case 'finished': return capture.hasData ? '点云采集完成' : '采集已结束，暂无有效点云'
+    case 'timeout': return '点云采集等待超时'
+    default: return '等待车辆几何采集'
+  }
+})
 function bodyRadarForSave(view: 'top' | 'side') {
-  return bodyProjectionMeta.value[view].source === 'sample' ? '' : bodyImageUrls.value[view]
+  return bodyImageUrls.value[view]
 }
 
 /** 车身图无图时的占位：车道占用(红) → 等待驶入(绿) → 默认 */
@@ -369,10 +380,15 @@ function onBodyViewSwap() {
 
 const bodyRadarFetching = ref<{ top: boolean; side: boolean }>({ top: false, side: false })
 let bodyProjectionGeneration = 0
+let bodyRadarRefreshQueued = false
+let bodyRadarLoadedFrame = -1
 
 async function ensureBodyRadarImage(refresh = false) {
   if (!refresh && bodyCloudGeometry.value) return
-  if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) return
+  if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) {
+    if (refresh) bodyRadarRefreshQueued = true
+    return
+  }
   const generation = bodyProjectionGeneration
   bodyRadarFetching.value = { top: true, side: true }
   bodyProjectionError.value = ''
@@ -380,9 +396,25 @@ async function ensureBodyRadarImage(refresh = false) {
     const res = await fetchBodyRadarImageApi('top')
     if (generation !== bodyProjectionGeneration) return
     if (res.code !== 0) throw new Error(res.message || '点云投影获取失败')
-    if (!res.data?.geometry) throw new Error('接口未返回三维点云，请刷新重试')
+    if (res.data?.capture) {
+      const incoming = res.data.capture
+      const sameGeometry = !!bodyCloudGeometry.value && incoming.generation === bodyRadarCapture.value?.generation && incoming.frame === bodyRadarLoadedFrame
+      if (bodyRadarCapture.value && incoming.generation !== bodyRadarCapture.value.generation) {
+        bodyCloudGeometry.value = null
+        bodyImageUrls.value.top = ''
+        bodyImageUrls.value.side = ''
+      }
+      bodyRadarCapture.value = incoming
+      if (sameGeometry) return
+    }
+    if (!res.data?.geometry) {
+      bodyCloudGeometry.value = null
+      bodyImageUrls.value.top = ''
+      bodyImageUrls.value.side = ''
+      return
+    }
     bodyCloudGeometry.value = res.data.geometry
-    bodyCloudSource.value = res.data.source || 'live'
+    bodyRadarLoadedFrame = res.data.capture?.frame ?? -1
     const url = res?.data?.imageUrl
     if (res.data?.views) {
       for (const v of ['top', 'side'] as const) {
@@ -397,7 +429,13 @@ async function ensureBodyRadarImage(refresh = false) {
     bodyProjectionError.value = e instanceof Error ? e.message : '点云投影获取失败'
     console.warn('[BODY] 三维点云按需拉取失败', e)
   } finally {
-    if (generation === bodyProjectionGeneration) bodyRadarFetching.value = { top: false, side: false }
+    if (generation === bodyProjectionGeneration) {
+      bodyRadarFetching.value = { top: false, side: false }
+      if (bodyRadarRefreshQueued) {
+        bodyRadarRefreshQueued = false
+        void ensureBodyRadarImage(true)
+      }
+    }
   }
 }
 
@@ -1746,7 +1784,8 @@ function doReset() {
   bodyProjectionMeta.value = { top: { source: '', metersPerPixel: .01 }, side: { source: '', metersPerPixel: .01 } }
   bodyProjectionError.value = ''
   bodyCloudGeometry.value = null
-  bodyCloudSource.value = ''
+  bodyRadarCapture.value = null
+  bodyRadarRefreshQueued = false
   laneOccupied.value = false
   gateReleased.value = false
   radarObjectCount.value = 0
@@ -2202,6 +2241,15 @@ function setupWS() {
   wsStore.subscribe('booking', handleBookingComing)
 
   wsStore.subscribe('booking_accepted', (msg) => {
+    // 新一轮不得保留上一辆车的点云或在途缓存响应。
+    bodyProjectionGeneration++
+    bodyRadarFetching.value = { top: false, side: false }
+    bodyRadarRefreshQueued = false
+    bodyCloudGeometry.value = null
+    bodyImageUrls.value.top = ''
+    bodyImageUrls.value.side = ''
+    bodyRadarCapture.value = null
+    void ensureBodyRadarImage(true)
     const data = msg.data as BookingAcceptedPayload | undefined
     laneOccupied.value = false
     gateReleased.value = false
@@ -2257,6 +2305,29 @@ function setupWS() {
   function shouldAcceptPanelImages() {
     return bookingStore.isDetection
   }
+
+  const unsubscribeBodyRadar = wsStore.subscribe('body_radar', (msg) => {
+    const capture = msg.data as BodyRadarCaptureStatus | undefined
+    if (!capture) return
+    if (bodyRadarCapture.value?.generation !== capture.generation || capture.state === 'stopped') {
+      bodyProjectionGeneration++
+      bodyRadarFetching.value = { top: false, side: false }
+      bodyRadarRefreshQueued = false
+      bodyCloudGeometry.value = null
+      bodyImageUrls.value.top = ''
+      bodyImageUrls.value.side = ''
+    }
+    bodyRadarCapture.value = capture
+    // 通知只携带轻量状态，实际点云通过缓存接口获取，不重复访问中间件。
+    if (capture.hasData || capture.state === 'finished' || capture.state === 'timeout') {
+      void ensureBodyRadarImage(true)
+    }
+  })
+  // 页面刷新或断线重连后恢复缓存；即使停留在车身图也持续接收本轮点云。
+  const unsubscribeBodyRadarConnection = watch(() => wsStore.isConnected, (connected) => {
+    if (connected) void ensureBodyRadarImage(true)
+  }, { immediate: true })
+  onUnmounted(() => { unsubscribeBodyRadar(); unsubscribeBodyRadarConnection() })
 
   /** 图像就绪：兼容
    *  1) mock_back：{ imageType: body|transparent, urls: {1,2,3} }
@@ -2616,7 +2687,7 @@ const anyDialogOpen = computed(
             <img src="/assets/img/a_car.png" class="panel-icon" alt="" />
             <span class="panel-title">车身影像</span>
             <span class="header-spacer" aria-hidden="true" />
-            <span v-if="bodyProjectionDemo" class="projection-source">示范数据</span>
+            <span v-if="bodyView !== 'body'" class="projection-source" :title="bodyRadarStatusText">{{ bodyRadarStatusText }}</span>
             <span v-if="bodyCaptureError" class="projection-error" :title="bodyCaptureError">{{ bodyCaptureError }}</span>
             <span v-if="bodyView !== 'body' && bodyProjectionError" class="projection-error" :title="bodyProjectionError">拉取失败</span>
             <span class="xray-meta">{{ bodyViewLabel }}：</span>
@@ -2634,8 +2705,7 @@ const anyDialogOpen = computed(
             :capture-mode="bodyCaptureMode"
             :geometry="bodyCloudGeometry"
             :loading="bodyRadarFetching.top || bodyRadarFetching.side"
-            :error="bodyProjectionError"
-            :sample="bodyProjectionDemo"
+            :error="bodyProjectionError || bodyRadarStatusText"
             @screenshot="onBody3DScreenshot"
             @cancel-capture="bodyCaptureMode = false"
             @capture-error="onBodyCaptureError"
@@ -3169,7 +3239,7 @@ const anyDialogOpen = computed(
 <style scoped lang="scss">
 
 @use '@/styles/variables.scss' as *;
-.projection-source { color: #9a650c; font-size: 13px; white-space: nowrap; }
+.projection-source { color: #9a650c; font-size: 13px; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .projection-error { color: #b83f32; font-size: 13px; white-space: nowrap; }
 
 
