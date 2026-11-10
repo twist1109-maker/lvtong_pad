@@ -14,7 +14,7 @@ test('没有合法资源标识时不猜测删除地址', () => {
   }
 })
 
-test('Tailscale远程访问优先TCP，局域网保持UDP', () => {
+test('自动模式识别Tailscale；TCP筛选保持SDP与无TCP候选时的兼容性', () => {
   for (const host of ['100.69.226.19','100.86.211.35','100.64.0.1','100.127.255.255']) assert.equal(isTailscaleIpv4(host),true)
   for (const host of ['localhost','192.168.88.253','100.63.0.1','100.128.0.1','100.69.999.1']) assert.equal(isTailscaleIpv4(host),false)
   const sdp='v=0\r\na=candidate:1 1 udp 99 100.69.226.19 8189 typ host\r\na=candidate:2 1 tcp 98 100.69.226.19 8189 typ host tcptype passive\r\na=end-of-candidates\r\n'

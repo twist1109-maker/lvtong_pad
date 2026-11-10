@@ -15,6 +15,7 @@ export type WhepStatus =
 export type WhepPlayOptions = {
   video: HTMLVideoElement
   whepUrl: string
+  /** 默认优先TCP，减少无线丢片对画面的影响；auto保留浏览器协商。 */
   transport?: 'auto' | 'tcp'
 }
 
@@ -33,7 +34,7 @@ export function useWhepPlayer() {
     void fetch(url, { method: 'DELETE', keepalive: true, signal: AbortSignal.timeout(5000) }).catch(() => {})
   }
 
-  async function play({ video, whepUrl, transport = 'auto' }: WhepPlayOptions) {
+  async function play({ video, whepUrl, transport = 'tcp' }: WhepPlayOptions) {
     void stop()
     const current = generation
     const controller = new AbortController()

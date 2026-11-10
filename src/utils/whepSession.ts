@@ -16,7 +16,7 @@ export function isTailscaleIpv4(hostname: string): boolean {
     && parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127
 }
 
-/** DERP/弱网下UDP丢包会使关键帧永远拼不全；Tailscale远程预览使用ICE TCP。 */
+/** 无线局域网和远程链路都可能丢失视频分片；有TCP候选时使用可靠传输。 */
 export function preferTcpCandidates(sdp: string, preferTcp: boolean): string {
   if (!preferTcp || !/^a=candidate:\S+ \d+ tcp /im.test(sdp)) return sdp
   return sdp.split('\n').filter(line=>!/^a=candidate:/i.test(line)||/^a=candidate:\S+ \d+ tcp /i.test(line)).join('\n')
