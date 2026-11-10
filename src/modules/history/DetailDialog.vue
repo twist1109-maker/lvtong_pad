@@ -67,6 +67,7 @@ const emit = defineEmits<{
       inspector_phone: string
       no_pass_type: number
       group_id: number
+      history_record: string
     },
   ]
 }>()
@@ -458,7 +459,6 @@ function onReviewerChange() {
 
 watch(resultStatus, (v) => {
   if (v === 0) {
-    remark.value = ''
     noPassType.value = 0
     return
   }
@@ -567,6 +567,7 @@ function onConfirmSubmit() {
     inspector_phone: inspectorPhone.value,
     no_pass_type: resultStatus.value === 1 ? noPassType.value : 0,
     group_id: Number(groupId.value) || 0,
+    history_record: remark.value,
   })
 }
 
@@ -590,6 +591,7 @@ async function onModify() {
       pass_code_vehicle_color_name: plateColor.value,
       load_rate: loadRate.value ? Number(loadRate.value) : record.value.load_rate,
       driver_phone: driverPhone.value,
+      history_record: remark.value,
       vehicle_size: parseVehicleSizeToMm(vehicleSizeDisplay.value),
       operator_name: inspector?.real_name || record.value.operator_name,
       inspector_phone: inspectorPhone.value,
@@ -768,7 +770,7 @@ onMounted(async () => {
               <div class="field-row"><label>车辆状态标识</label><input readonly :value="getVehicleSignStr(record.pass_code_vehicle_sign)" /></div>
               <div class="field-row">
                 <label class="label-required"><span class="req-star">*</span>备注内容</label>
-                <input v-model="remark" :readonly="readOnly" />
+                <input v-model="remark" aria-label="备注内容" />
               </div>
             </div>
 

@@ -6,6 +6,7 @@
  * - 不做暗化、不做保存
  */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { cropLoadedImage, type CropBoxPayload } from '@/utils/cropPreview'
 
 export type BodyPcView = 'body' | 'top' | 'side'
 
@@ -22,14 +23,6 @@ const props = defineProps<{
   /** Undefined keeps the legacy draw-to-crop behavior used by X-ray panels. */
   captureMode?: boolean
 }>()
-
-export type CropBoxPayload = {
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  sourceTempUrl: string
-}
 
 const emit = defineEmits<{
   crop: [payload: CropBoxPayload]
@@ -345,18 +338,13 @@ function isNearLine(clientX: number) {
 
 async function emitCrop(box: Box) {
   const sourceTempUrl = (props.sourceTempUrl || props.imageUrl || '').trim()
-  if (!sourceTempUrl.startsWith('/api/temp-images/')) {
-    emit('captureError', '原图不可用，请刷新影像后重试')
-    console.error('[BodyPointCloudPanel] sourceTempUrl 不是 temp 预览，无法原图裁切:', sourceTempUrl)
-    return
+  try {
+    if (!imgRef.value) throw new Error('图片尚未加载，无法截图')
+    const fallbackImage = cropLoadedImage(imgRef.value, box)
+    emit('crop', { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, sourceTempUrl, fallbackImage })
+  } catch (error) {
+    emit('captureError', error instanceof Error ? error.message : '截图失败，请重新框选')
   }
-  emit('crop', {
-    x1: box.x1,
-    y1: box.y1,
-    x2: box.x2,
-    y2: box.y2,
-    sourceTempUrl,
-  })
 }
 
 /** 等比放大铺满 stage（可放大可缩小，不超过容器），保证 .fit 与可见图同尺寸以便框图对齐 */

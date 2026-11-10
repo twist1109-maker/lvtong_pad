@@ -1,4 +1,5 @@
-import os,sys,time,json
+import os,sys,time,json,base64,tempfile
+from unittest.mock import patch
 from pathlib import Path
 backend = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[3] / 'gcms_src/flask_backend'
 if not (backend / 'tests/fixtures/vehicle.laz').is_file(): raise RuntimeError('Pass the local flask_backend path as the first argument')
@@ -27,11 +28,35 @@ frames,geometry=decode_body_radar_data((backend / 'tests/fixtures/vehicle.laz').
 image=np.full((500,1600,3),255,np.uint8)
 image[:250,:800]=(30,80,160);image[250:,:800]=(80,160,30);image[:250,800:]=(180,30,60);image[250:,800:]=(40,160,180)
 cv2.putText(image,'BODY ORIGINAL 1600 x 500',(200,270),cv2.FONT_HERSHEY_SIMPLEX,2,(255,255,255),4)
-_,encoded=cv2.imencode('.png',image);body=cache.put_and_url(encoded.tobytes(),'image/png')
+_,encoded=cv2.imencode('.png',image)
+_,preview=cv2.imencode('.jpg',cv2.resize(image,(800,250)))
+body=cache.put_preview_with_original(encoded.tobytes(),preview.tobytes(),original_mime='image/png')
+photo='data:image/png;base64,'+base64.b64encode(encoded.tobytes()).decode()
+artifacts=Path(__file__).resolve().parents[1]/'layout/artifacts';artifacts.mkdir(exist_ok=True)
+storage=tempfile.TemporaryDirectory(prefix='lvtong-crop-test-')
+import app.services.image_store as image_store
+image_store.IMAGE_STORAGE_ROOT=storage.name
+from app.api.inspection import inspection_api
+def save_submission(payload):
+ paths=payload['evidences_image_path'].split('|')
+ assert all(Path(path).is_file() for path in paths)
+ report={'history_record':payload.get('history_record'),'evidenceCount':len(paths),'goodsCount':len(payload['goods_image_path'].split('|')),
+         'evidenceSizes':[list(cv2.imread(path).shape[:2][::-1]) for path in paths],
+         'allEvidenceSaved':True,'databaseWritten':False}
+ (artifacts/'crop-submission.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
+ print('SUBMISSION',json.dumps(report,ensure_ascii=True),flush=True)
+ return 1
+mock_repo=patch('app.api.inspection.DBVehicle').start().return_value
+mock_repo.findRecentDuplicateId.return_value=None
+mock_repo.addInspection.side_effect=save_submission
+patch('app.db.user.DBUser').start().return_value.getUserByUsername.return_value={}
+from app.extensions.auth import create_token
 views={view:{'imageUrl':cache.put_and_url(frame.image,'image/png'),'metersPerPixel':.01,'coordinateAxes':frame.metadata['coordinateAxes']} for view,frame in frames.items()}
 @app.route('/api/temp-images/crop',methods=['POST'])
 def crop():
- b=request.json;url=cache.crop_from_preview_box(b['previewUrl'],b['x1'],b['y1'],b['x2'],b['y2']);return jsonify(code=0,data={'url':url})
+ try:
+  b=request.json;url=cache.crop_from_preview_box(b['previewUrl'],b['x1'],b['y1'],b['x2'],b['y2']);return jsonify(code=0,data={'url':url})
+ except ValueError as error:return jsonify(code=400,message=str(error)),400
 @app.route('/api/temp-images/<tid>')
 def image_get(tid):
  entry=cache.get(tid)
@@ -40,12 +65,21 @@ def image_get(tid):
 def radar():
  result=capture.get_geometry_snapshot()
  return jsonify(code=0,data={**result,'imageUrl':result.get('views',{}).get('top',{}).get('imageUrl','')})
+@app.route('/api/inspection/plate/<plate>')
+def history(plate):return jsonify(code=0,data={'count':1,'driver_phone':'13800000000','vehicle_type':'16','vehicle_container_type':'3','vehicle_size':'12000|2500|3500'})
+app.register_blueprint(inspection_api)
 @app.route('/api/<path:path>',methods=['GET','POST'])
 def fallback(path):
  data=[]
  if path=='device/gate-status':data={'connected':True,'stickdown':False,'gateOpen':False}
  if path=='device/status':data={'sensors':[]}
  if path=='device/plc-status':data={'fresh':True,'stickdown':False}
+ if path=='auth/me':data={'phone':'13800000000','realName':'隔离测试','groupId':1}
+ if path=='fixture/token':data={'token':create_token({'username':'layout-test','real_name':'隔离测试'})}
+ if path=='dict/truck-types':data=[{'type_code':'16','type_name':'六型货车'}]
+ if path=='dict/container-types':data=[{'type_code':'3','type_name':'厢式'}]
+ if path.startswith('dict/stations/'):data={'station_name':'测试收费站'}
+ if path=='user/query':data=[{'username':'layout-test','real_name':'隔离测试','phone':'13800000000'}]
  return jsonify(code=0,data=data)
 @io.on('message')
 def message(data):
@@ -60,5 +94,12 @@ def message(data):
  elif data['type']=='fixture_body_reset':
   capture.stop_geometry_capture()
   io.emit('message',{'type':'booking_reset','data':{}})
+ elif data['type']=='fixture_expire':
+  with cache._LOCK:
+   for entry in cache._CACHE.values():entry.created_at-=3*60*60
+  print('ISOLATED expired cache; browser keeps the displayed image',flush=True)
+ elif data['type']=='fixture_capture_seed':
+  io.emit('message',{'type':'mobile_upload','data':{'phone':'13800000000','goods_type':'10101','head_image_path':photo,'tail_image_path':photo,'license_image_path1':photo,'passcode_image_path':photo,'goods_image_path':photo,'evidences_image_path':photo+'|'+photo}})
+  io.emit('message',{'type':'mobile_passcode','data':{'valid':True,'vehicleId':'鄂A12345_1','vehicleDisplayId':'鄂A12345','vehicleColorName':'1','enStationId':'entry','exStationId':'exit','enWeight':'20000','exWeight':'20000','mediaTypeId':2,'transactionId':'fixture-transaction','passId':'fixture-pass','exTime':'2026-11-10 12:00:00','transPayTypeId':1,'fee':'100','payFee':'100','vehicleSignId':2,'provinceCount':'1'}})
 io.run(app,host='127.0.0.1',port=5194,allow_unsafe_werkzeug=True)
 

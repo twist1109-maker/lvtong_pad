@@ -24,6 +24,8 @@ if (fixtureOptions.get('radarSync') === '1') {
 }
 if (fixtureOptions.get('bodyCapture') === '1') {
   Object.assign(appConfig, { useMock: false, wsUrl: 'http://127.0.0.1:5194' })
+  const response = await fetch('/api/fixture/token')
+  sessionStorage.setItem('lvtong_token', (await response.json()).data.token)
 }
 const captureBlocked = ref(fixtureOptions.get('captureBlocked') === '1')
 if (fixtureOptions.get('detector') === 'absent') {
@@ -132,6 +134,8 @@ const bodyCaptureFixture = defineComponent({
   setup: () => () => [h(App), h('div', {
     style: 'position:fixed;top:0;right:0;z-index:20000;padding:8px;background:#fff;color:#000',
   }, [h('button', { onClick: () => useWsStore().send({ type: 'fixture_body_images', data: {} }) }, '模拟车身影像'),
+      h('button', { onClick: () => useWsStore().send({ type: 'fixture_capture_seed', data: {} }) }, '模拟原有证据和资料'),
+      h('button', { onClick: () => useWsStore().send({ type: 'fixture_expire', data: {} }) }, '模拟临时图过期'),
       h('button', { onClick: () => useWsStore().send({ type: 'fixture_body_reset', data: {} }) }, '模拟采集重置')])],
 })
 const app = createApp(fixtureOptions.has('bodyCapture') ? bodyCaptureFixture : fixtureOptions.has('radarSync') ? radarSyncFixture : fixtureOptions.has('captureBlocked') ? captureGuardFixture : App)

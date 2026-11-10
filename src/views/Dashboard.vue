@@ -51,6 +51,7 @@ import type {
 import { useRouter } from 'vue-router'
 import { toApiUrl, toStoragePath, joinImagePaths } from '@/utils/imagePath'
 import { processImage } from '@/utils/imageProcess'
+import { resolveCropPreview, type CropBoxPayload } from '@/utils/cropPreview'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
 import { PTZ_WHEP_URL } from '@/config/liveVideo'
 import { appConfig } from '@/config/env'
@@ -1019,14 +1020,6 @@ const bodyPcPanelRef = ref<{ clearBoxes: () => void; ready: boolean } | null>(nu
 const xrayBoxPanelRef = ref<{ clearBoxes: () => void } | null>(null)
 let cropReqSeq = 0
 
-type CropBoxPayload = {
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  sourceTempUrl: string
-}
-
 async function requestOriginalCrop(payload: CropBoxPayload): Promise<string> {
   const res = await request<{ url: string }>('/temp-images/crop', {
     method: 'POST',
@@ -1048,8 +1041,10 @@ async function onBodyBoxCrop(payload: CropBoxPayload) {
   bodyCaptureMode.value = false
   xrayBoxPanelRef.value?.clearBoxes()
   const seq = ++cropReqSeq
+  liveCropPreviewUrl.value = ''
+  bodyCaptureError.value = ''
   try {
-    const url = await requestOriginalCrop(payload)
+    const url = await resolveCropPreview(payload, () => requestOriginalCrop(payload))
     if (seq !== cropReqSeq) return
     liveCropPreviewUrl.value = url
   } catch (e) {
@@ -1070,29 +1065,32 @@ function onBody3DScreenshot(image: string) {
 async function onXrayBoxCrop(payload: CropBoxPayload) {
   bodyPcPanelRef.value?.clearBoxes()
   const seq = ++cropReqSeq
+  liveCropPreviewUrl.value = ''
+  bodyCaptureError.value = ''
   try {
-    const url = await requestOriginalCrop(payload)
+    const url = await resolveCropPreview(payload, () => requestOriginalCrop(payload))
     if (seq !== cropReqSeq) return
     liveCropPreviewUrl.value = url
   } catch (e) {
+    if (seq !== cropReqSeq) return
+    bodyCaptureError.value = e instanceof Error ? e.message : '截图失败，请重新框选'
     console.error('[Dashboard] 透视原图裁切失败', e)
   }
 }
 
-/** 「勾」：确认把当前右侧原图裁切保存到货物图列表。
- *  - url 为 /api/temp-images/<id>（原图分辨率裁块），提交时 persist 落库
- *  - 同步刷新 captureThumbs.goods
- *  - 清预览与两侧框
- */
-function onConfirmCropToGoods() {
+/** 「勾」：追加到证据照，保留已有照片；图片数据在提交时落库。 */
+function onConfirmCropToEvidence() {
   if (!liveCropPreviewUrl.value) return
-  const next = [...(captureLists.value.goods || []), liveCropPreviewUrl.value]
-  captureLists.value = { ...captureLists.value, goods: next }
-  captureThumbs.value = { ...captureThumbs.value, goods: next[next.length - 1] || '' }
+  cropReqSeq++
+  const existing = captureLists.value.evidence.length ? captureLists.value.evidence
+    : captureThumbs.value.evidence ? [captureThumbs.value.evidence] : []
+  const next = [...existing, liveCropPreviewUrl.value]
+  captureLists.value = { ...captureLists.value, evidence: next }
+  captureThumbs.value = { ...captureThumbs.value, evidence: next[next.length - 1] || '' }
   liveCropPreviewUrl.value = ''
   bodyPcPanelRef.value?.clearBoxes()
   xrayBoxPanelRef.value?.clearBoxes()
-  console.info('[Dashboard] 框图已保存到货物图:', next.length)
+  console.info('[Dashboard] 框图已追加到证据照:', next.length)
 }
 
 /** 「×」：清除框图预览 + 车身/透视上的框 */
@@ -1774,6 +1772,7 @@ function doReset() {
   // 清图片（对齐 Qt clearFormData 清除所有图片缩略图）
   captureThumbs.value = {}
   captureLists.value = { goods: [], evidence: [] }
+  submitRemark.value = ''
   licensePaths.value = { license: '', licenseGc: '', licenseStitched: '' }
   weightRangeHint.value = ''
   aiLicenseCropLastKey = ''
@@ -1910,6 +1909,7 @@ function buildSubmitPreview(): InspectionDetail {
     reviewer_name: activeReviewer.name || '',
     group_id: auth.user?.groupId ?? 0,
     result_status: 0,
+    history_record: submitRemark.value,
     pass_code_vehicle_color_name: form.value.plateColor || pc?.vehicleColorName || '',
     pass_code_en_station_id: pc?.enStationId,
     pass_code_ex_station_id: pc?.exStationId,
@@ -1969,7 +1969,9 @@ async function onSubmitConfirmYes(payload?: {
   inspector_phone?: string
   no_pass_type?: number
   group_id?: number
+  history_record?: string
 }) {
+  submitRemark.value = payload?.history_record ?? submitRemark.value
   showSubmitPreview.value = false
   submitPreview.value = null
 
@@ -2050,6 +2052,7 @@ async function onSubmitConfirmYes(payload?: {
     // 0=正常，1=异常
     result_status: payload?.result_status ?? 0,
     no_pass_type: payload?.no_pass_type ?? 0,
+    history_record: submitRemark.value,
   }
 
   // ---- 3. 通行码 14 字段（从 passcode ref 读） ----
@@ -2121,6 +2124,7 @@ const stopErrorMessage = ref('')
 // ---- 提交前查验记录预览 — 对齐 DetailDialog ----
 const showSubmitPreview = ref(false)
 const submitPreview = ref<InspectionDetail | null>(null)
+const submitRemark = ref('')
 const showResetConfirmBox = ref(false)
 
 // ---- WebSocket 实时数据 ----
@@ -2830,9 +2834,9 @@ const anyDialogOpen = computed(
               type="button"
               class="header-icon-btn"
               :class="{ disabled: !liveCropPreviewUrl }"
-              :title="liveCropPreviewUrl ? '保存到货物图' : '当前无裁切预览'"
+              :title="liveCropPreviewUrl ? '追加到证据照' : '当前无裁切预览'"
               :disabled="!liveCropPreviewUrl"
-              @click="onConfirmCropToGoods"
+              @click="onConfirmCropToEvidence"
             >
               <img src="/assets/img/good_save.png" alt="" />
             </button>

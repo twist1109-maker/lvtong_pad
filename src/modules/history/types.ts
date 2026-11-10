@@ -109,6 +109,7 @@ export interface UserOption {
 }
 
 export interface DetailModifyPayload {
+  history_record?: string
   vehicle_type?: string
   vehicle_name?: string
   vehicle_container_type?: string
