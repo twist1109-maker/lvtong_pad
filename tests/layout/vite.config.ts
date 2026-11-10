@@ -19,7 +19,15 @@ const config = mergeConfig(base, defineConfig({
         if (req.url?.startsWith('/api/')) {
           res.setHeader('Content-Type', 'application/json');
           if (req.url.startsWith('/api/dict/products')) {
-            res.end(JSON.stringify({ code: 0, data: { items: [{ product_code: '101', variety_name: '白菜', variety_name_pinyin: 'baicai', product_type: '新鲜蔬菜', category: '蔬菜' }], total: 1 } }))
+            const params = new URL(req.url, 'http://127.0.0.1').searchParams
+            const keyword = (params.get('keyword') || '').trim().toLowerCase()
+            const type = params.get('product_type')
+            const items = [
+              { product_code: '10101', variety_name: '大白菜', variety_name_pinyin: 'DBC', product_type: '新鲜蔬菜', category: '蔬菜' },
+              { product_code: '10402', variety_name: '菠菜', variety_name_pinyin: 'BC', product_type: '新鲜蔬菜', category: '蔬菜' },
+              { product_code: '20101', variety_name: '苹果', variety_name_pinyin: 'PG', product_type: '新鲜水果', category: '水果' },
+            ].filter(p => (!type || p.product_type === type) && (!keyword || p.variety_name.includes(keyword) || p.variety_name_pinyin.toLowerCase().includes(keyword)))
+            res.end(JSON.stringify({ code: 0, data: { items, total: items.length } }))
             return
           }
           if (req.url.startsWith('/api/dict/stations/')) {

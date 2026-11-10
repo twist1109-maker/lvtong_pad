@@ -101,7 +101,14 @@ function setMode(m: KeyboardMode) {
 }
 
 function insertKey(ch: string) {
-  plate.value = `${plate.value}${ch}`
+  if (PROVINCES.includes(ch)) {
+    // 省份始终占首位，连续选择只替换前缀；号码及合法尾缀（挂/港等）保留。
+    const prefix = [...plate.value].findIndex((char) => !PROVINCES.includes(char))
+    const suffix = prefix === -1 ? '' : plate.value.slice(prefix)
+    plate.value = ch + suffix
+  } else {
+    plate.value = `${plate.value}${ch}`
+  }
 }
 
 function onBackspace() {
@@ -198,6 +205,7 @@ defineExpose({ show })
               :key="`${mode}-${k}`"
               type="button"
               class="key-btn"
+              :aria-pressed="mode === 'province' ? plate.startsWith(k) : undefined"
               @click="insertKey(k)"
             >
               {{ k }}
@@ -390,7 +398,8 @@ defineExpose({ show })
     background: #e9ecef;
     border-color: #007bff;
   }
-  &:active {
+  &:active,
+  &[aria-pressed='true'] {
     background: #007bff;
     color: #fff;
   }

@@ -21,7 +21,7 @@ polls=0
 def fixture_laz():
  global polls
  polls+=1
- if polls<=3:return jsonify(status='false',error='')
+ if polls<=3:return Response(b'',mimetype='application/octet-stream')
  return Response((backend/'tests/fixtures/vehicle.laz').read_bytes(),headers={'Capture-Finish':'true' if polls>=6 else 'false'},mimetype='application/octet-stream')
 frames,geometry=decode_body_radar_data((backend / 'tests/fixtures/vehicle.laz').read_bytes())
 image=np.full((500,1600,3),255,np.uint8)

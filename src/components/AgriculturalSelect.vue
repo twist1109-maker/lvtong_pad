@@ -264,7 +264,7 @@ defineExpose({ show })
             <input
               v-model="searchText"
               class="keyword-input"
-              placeholder="输入品种名称或别名搜索..."
+              placeholder="名称、别名或拼音首字母（如 BC）"
               @keyup.enter="onSearch"
             />
             <button type="button" class="btn" :disabled="loading" @click="onSearch">搜索</button>
