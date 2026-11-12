@@ -54,6 +54,7 @@ import { useRouter } from 'vue-router'
 import { toApiUrl, toStoragePath, joinImagePaths } from '@/utils/imagePath'
 import { processImage } from '@/utils/imageProcess'
 import { resolveCropPreview, type CropBoxPayload } from '@/utils/cropPreview'
+import { plateColorStyle } from '@/utils/licensePlate'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
 import { PTZ_WHEP_URL } from '@/config/liveVideo'
 import { appConfig } from '@/config/env'
@@ -1083,12 +1084,14 @@ function onBody3DScreenshot(image: string) {
 }
 
 async function onXrayBoxCrop(payload: CropBoxPayload) {
+  bodyCaptureMode.value = false
   bodyPcPanelRef.value?.clearBoxes()
   const seq = ++cropReqSeq
   liveCropPreviewUrl.value = ''
   bodyCaptureError.value = ''
   try {
-    const url = await resolveCropPreview(payload, () => requestOriginalCrop(payload))
+    // 透视截图保留当前灰场/亮场/伪彩，不能用未经处理的原图替换。
+    const url = await resolveCropPreview({ ...payload, sourceTempUrl: '' }, () => requestOriginalCrop(payload))
     if (seq !== cropReqSeq) return
     liveCropPreviewUrl.value = url
   } catch (e) {
@@ -2779,7 +2782,9 @@ const anyDialogOpen = computed(
             :image-url="xrayDisplayUrl || undefined"
             :source-temp-url="transparentImageUrl || undefined"
             view="body"
+            :capture-mode="true"
             @crop="onXrayBoxCrop"
+            @capture-error="bodyCaptureError = $event"
           />
         </div>
 
@@ -2952,12 +2957,12 @@ const anyDialogOpen = computed(
           <div class="form-body">
             <div class="form-row">
               <label>车牌号码：</label>
-              <span class="field-value">{{ form.plate }}</span>
+              <span class="field-value" :style="plateColorStyle(form.plateColor)">{{ form.plate }}</span>
               <button class="icon-btn" title="号牌号码编辑" @click="onEditPlate">
                 <img src="/assets/img/a_chxz.png" alt="" />
               </button>
               <label class="col-right">挂车号码：</label>
-              <span class="field-value">{{ form.plateGc }}</span>
+              <span class="field-value" :style="plateColorStyle(form.plateGcColor)">{{ form.plateGc }}</span>
               <button class="icon-btn" title="号牌号码编辑" @click="onEditPlateGC">
                 <img src="/assets/img/a_chxz.png" alt="" />
               </button>

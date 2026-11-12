@@ -20,7 +20,7 @@ const props = defineProps<{
   placeholder?: string
   /** 无图占位文字色调：default 灰 / occupied 红 / waiting 绿 */
   placeholderTone?: 'default' | 'occupied' | 'waiting'
-  /** Undefined keeps the legacy draw-to-crop behavior used by X-ray panels. */
+  /** 允许拖框截图；Vue省略布尔属性时为false，透视图需显式传true。 */
   captureMode?: boolean
 }>()
 

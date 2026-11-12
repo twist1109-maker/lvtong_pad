@@ -4,6 +4,7 @@
  * 尺寸 900×700：号牌输入 + 三态虚拟键盘 + 10 色单选 + 取消/确认
  */
 import { computed, nextTick, ref } from 'vue'
+import { PLATE_PROVINCES, normalizePlate, normalizePlateColor, plateColorStyle, plateFormatError } from '@/utils/licensePlate'
 
 const props = withDefaults(
   defineProps<{
@@ -25,12 +26,7 @@ const emit = defineEmits<{
 
 type KeyboardMode = 'province' | 'letter' | 'number'
 
-const PROVINCES = [
-  '京', '津', '沪', '渝', '冀', '豫', '云', '辽', '黑', '湘',
-  '皖', '鲁', '新', '苏', '浙', '赣', '鄂', '桂', '甘', '晋',
-  '蒙', '陕', '吉', '闽', '贵', '粤', '青', '藏', '川', '宁',
-  '琼', '港', '澳', '台',
-]
+const PROVINCES = PLATE_PROVINCES
 
 const LETTERS = [
   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K',
@@ -71,19 +67,10 @@ const keys = computed(() => {
   return PROVINCES
 })
 
-function normalizeColor(raw?: string): string {
-  if (!raw) return ''
-  const s = String(raw).trim()
-  if (VALID_COLORS.has(s)) return s
-  // 兼容中文色名
-  const byLabel = COLOR_OPTIONS.find((c) => c.label === s)
-  return byLabel?.value ?? ''
-}
-
 function show() {
   const p = props.currentPlate?.trim() || ''
   plate.value = p === '--' ? '' : p
-  color.value = normalizeColor(props.currentColor)
+  color.value = normalizePlateColor(props.currentColor)
   mode.value = 'province'
   tipVisible.value = false
   visible.value = true
@@ -130,13 +117,11 @@ function showTip(msg: string, near: 'plate' | 'color' = 'plate') {
 }
 
 function onConfirm() {
-  const plateNumber = plate.value.trim()
-  if (!plateNumber) {
-    showTip('车牌号码不能为空 ！ ', 'plate')
-    return
-  }
-  if (plateNumber.length <= 6 || plateNumber.length > 10) {
-    showTip(`无效车牌号码: ${plateNumber}`, 'plate')
+  const plateNumber = normalizePlate(plate.value)
+  plate.value = plateNumber
+  const error = plateFormatError(plateNumber)
+  if (error) {
+    showTip(error, 'plate')
     return
   }
   if (!color.value || !VALID_COLORS.has(color.value)) {
@@ -165,8 +150,11 @@ defineExpose({ show })
           ref="plateInputRef"
           v-model="plate"
           class="plate-input"
+          :style="plateColorStyle(color)"
+          aria-label="车牌号码"
           autocomplete="off"
           spellcheck="false"
+          @keydown.enter="onConfirm"
         />
 
         <!-- 虚拟键盘 -->
@@ -231,7 +219,7 @@ defineExpose({ show })
         </div>
       </div>
 
-      <div v-if="tipVisible" class="toast" :style="{ top: `${tipTop}px` }">
+      <div v-if="tipVisible" class="toast" role="alert" :style="{ top: `${tipTop}px` }">
         {{ tipMessage }}
       </div>
     </div>
@@ -477,7 +465,8 @@ defineExpose({ show })
   color: #fff;
   border-radius: 6px;
   font-size: 14px;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   pointer-events: none;
 }

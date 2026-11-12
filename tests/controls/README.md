@@ -1,5 +1,11 @@
 # 默认相机与PLC交互验收
 
+## 车牌录入（2026-11-12）
+
+`node --test tests/controls/license-plate.test.ts`检查普通7位、新能源8位、挂/学/警等尾缀、无效省份及第二位、I/O和非法字符、全角小写规范化、颜色代码与中文名映射。新能源粗查序号至少4位数字，兼容CA等号段，不做地区、号段或真实性校验。
+
+隔离浏览器已验证渝DRRGG44拒绝，鄂ACA3532允许，黄色/渐变绿色选项立即改变编辑框底色，确认后主页沿用底色；数字代码与参考项目gongsi_LvTong配色一致。证据见`tests/layout/artifacts/plate-color-yellow.png`、`plate-color-green.png`、`plate-format-error.png`。
+
 运行后端虚拟环境 `python tests/controls/feedback_relay.py`（仅监听本机5197，不导入业务代码），再运行 `npx vite --config tests/controls/vite.config.ts`，打开 `/tests/controls/`。所有HTTP请求均在测试入口拦截，WS也仅连接本机反馈中继，不连接现场；默认错误访问本机摄像头时直接报错。`?gate=1`改为使用真实Dashboard验证闸机图标。
 
 - 打开head/tail/top/goods，检查相机标签和WHEP请求依次为车头cam2、车尾cam1、车顶cam6、球机cam5；手动切换平板仍保留；证据照沿用平板默认。
