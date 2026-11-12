@@ -1,5 +1,18 @@
 # 车身截图验收
 
+## 全屏预览（2026-11-12）
+
+隔离服务同时提供灰度透视样图，无需开启X光。用布局入口加载影像，
+核对车身和透视右上角“预览”无图禁用、有图可用。点击后铺满浏览器内容区，
+支持滚轮或按钮缩放、放大后拖动、“适应窗口”恢复、×或Esc关闭并返回按钮焦点。
+透视图预览保留当前灰场、亮场、伪彩结果；3D模式预览当前视角的图片及尺寸标注。
+预览直接读取已加载画面，模拟临时接口过期后仍可打开。
+
+已在1280×720、1024×768、768×1024下验证按钮可见和全屏布局；
+放大到115%、拖动140×60像素后恢复，变换正确清零。
+截图和结果保存于`tests/layout/artifacts/image-preview-*`及`*-fullscreen-preview.png`。
+这些是本机隔离验证，不代表现场实际采集验证。
+
 `node --test tests/bodyRadar/*.test.ts` 验证点云数据校验及框选在CSS缩放、反向拖动和超出边界时的像素映射。
 
 `npx vite --config tests/bodyRadar/capture.vite.config.ts` 提供隔离Dashboard，URL为 `/tests/bodyRadar/?bodyCapture=1`。API及Socket.IO仅连接本机5194测试服务，不能转发到现场。

@@ -12,6 +12,7 @@ import BodyPointCloudPanel from '@/components/BodyPointCloudPanel.vue'
 import type { CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
 const BodyCloud3DPanel = defineAsyncComponent(() => import('@/components/BodyCloud3DPanel.vue'))
 import PreviewButton from '@/components/PreviewButton.vue'
+import ImageGalleryDialog, { type GalleryItem } from '@/components/common/ImageGalleryDialog.vue'
 import BottomWorkflowPanel from '@/components/BottomWorkflowPanel.vue'
 import type { WorkflowStepKey } from '@/components/WorkflowIcons.vue'
 import {
@@ -309,7 +310,7 @@ const BODY_VIEW_LABELS: Record<BodyView, string> = {
 const bodyView = ref<BodyView>('body')
 const bodyCaptureMode = ref(false)
 const bodyCaptureError = ref('')
-const bodyCloudPanelRef = ref<{ ready: boolean } | null>(null)
+const bodyCloudPanelRef = ref<{ ready: boolean; getPreviewImage: () => string } | null>(null)
 const bodyCanCapture = computed(() => bodyView.value === 'body' ? !!bodyPcPanelRef.value?.ready : !!bodyCloudPanelRef.value?.ready)
 function toggleBodyCapture() {
   bodyCaptureError.value = ''
@@ -1016,8 +1017,20 @@ function reconnectLiveVideo() {
 
 /** 框图裁切预览（叠在 WebRTC 视频之上；来自车身/透视框图 → 后端原图裁切） */
 const liveCropPreviewUrl = ref('')
-const bodyPcPanelRef = ref<{ clearBoxes: () => void; ready: boolean } | null>(null)
-const xrayBoxPanelRef = ref<{ clearBoxes: () => void } | null>(null)
+const bodyPcPanelRef = ref<{ clearBoxes: () => void; ready: boolean; getPreviewImage: () => string } | null>(null)
+const xrayBoxPanelRef = ref<{ clearBoxes: () => void; ready: boolean; getPreviewImage: () => string } | null>(null)
+const imagePreview = shallowRef<GalleryItem[] | null>(null)
+const imagePreviewError = ref('')
+function openImagePreview(kind: 'body' | 'xray') {
+  imagePreviewError.value = ''
+  const panel = kind === 'xray' ? xrayBoxPanelRef.value : bodyView.value === 'body' ? bodyPcPanelRef.value : bodyCloudPanelRef.value
+  if (!panel?.ready) return
+  try {
+    imagePreview.value = [{ label: kind === 'xray' ? `透视影像 · ${xrayViewLabel.value}` : `车身影像 · ${bodyViewLabel.value}`, src: panel.getPreviewImage() }]
+  } catch (error) {
+    imagePreviewError.value = error instanceof Error ? error.message : '影像预览失败，请重试'
+  }
+}
 let cropReqSeq = 0
 
 async function requestOriginalCrop(payload: CropBoxPayload): Promise<string> {
@@ -2702,6 +2715,7 @@ const anyDialogOpen = computed(
             <button type="button" class="header-icon-btn header-icon-swap" title="切换视角" @click="onBodyViewSwap">
               <img src="/assets/img/a_leftright.png" alt="" />
             </button>
+            <button type="button" class="body-capture-btn" :disabled="!bodyCanCapture" title="全屏预览车身影像" @click="openImagePreview('body')">预览</button>
           </div>
           <BodyCloud3DPanel
             v-if="bodyView !== 'body'"
@@ -2779,6 +2793,7 @@ const anyDialogOpen = computed(
             <button type="button" class="header-icon-btn header-icon-swap" title="切换视角" @click="onXrayViewSwap">
               <img src="/assets/img/a_leftright.png" alt="" />
             </button>
+            <button type="button" class="body-capture-btn" :disabled="!xrayBoxPanelRef?.ready" title="全屏预览透视影像" @click="openImagePreview('xray')">预览</button>
           </div>
           <!-- 与车身框图相同：在色阶/伪彩结果上画框，裁切进实时视频区（不测距） -->
           <BodyPointCloudPanel
@@ -3181,6 +3196,8 @@ const anyDialogOpen = computed(
       @close="onStopConfirmNo"
     />
 
+    <ImageGalleryDialog v-if="imagePreview" :items="imagePreview" full-screen @close="imagePreview = null" />
+    <QtMessageBox v-if="imagePreviewError" title="影像预览" icon="warning" :buttons="['ok']" :message="imagePreviewError" @ok="imagePreviewError = ''" @close="imagePreviewError = ''" />
     <!-- 透视图删除 — 对齐 onPreviewTansDel：确认 / 确定要删除透视图 ？ -->
     <QtMessageBox
       v-if="showTransDelConfirm"

@@ -31,6 +31,10 @@ cv2.putText(image,'BODY ORIGINAL 1600 x 500',(200,270),cv2.FONT_HERSHEY_SIMPLEX,
 _,encoded=cv2.imencode('.png',image)
 _,preview=cv2.imencode('.jpg',cv2.resize(image,(800,250)))
 body=cache.put_preview_with_original(encoded.tobytes(),preview.tobytes(),original_mime='image/png')
+xray_image=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+cv2.putText(xray_image,'XRAY FIXTURE',(300,400),cv2.FONT_HERSHEY_SIMPLEX,2,255,4)
+_,xray_encoded=cv2.imencode('.png',xray_image)
+xray=cache.put_and_url(xray_encoded.tobytes(),'image/png')
 photo='data:image/png;base64,'+base64.b64encode(encoded.tobytes()).decode()
 artifacts=Path(__file__).resolve().parents[1]/'layout/artifacts';artifacts.mkdir(exist_ok=True)
 storage=tempfile.TemporaryDirectory(prefix='lvtong-crop-test-')
@@ -89,6 +93,7 @@ def message(data):
   generation=capture.prepare_geometry_capture()
   io.emit('message',{'type':'booking_accepted','data':{'vehicleHeight':3,'carHeadLength':1.8,'vehicleType':'small','xrayEnabled':False}})
   io.emit('message',{'type':'image_ready','data':{'imageType':'body','urls':{'1':body}}})
+  io.emit('message',{'type':'image_ready','data':{'imageType':'transparent','urls':{'1':xray,'2':xray,'3':xray}}})
   capture.start_geometry_capture(generation)
   capture.start_geometry_poll(generation)
  elif data['type']=='fixture_body_reset':

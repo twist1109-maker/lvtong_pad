@@ -159,26 +159,30 @@ function onContextLost(event: Event) {
   renderError.value = '三维显示已中断，请刷新页面重试'
   emit('cancelCapture')
 }
+function getPreviewImage() {
+  if (!renderer || !ready.value || contextLost) throw new Error('三维画面尚未加载，无法预览')
+  // Render and copy synchronously: the default WebGL buffer is cleared after compositing.
+  render()
+  const canvas = document.createElement('canvas')
+  canvas.width = renderer.domElement.width; canvas.height = renderer.domElement.height
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(renderer.domElement, 0, 0)
+  const ratio = canvas.width / width
+  ctx.font = `${14 * ratio}px sans-serif`
+  ctx.fillStyle = '#fff'; ctx.fillRect(8 * ratio, 6 * ratio, Math.min(width - 16, 390) * ratio, 28 * ratio)
+  ctx.fillStyle = '#345a4e'
+  ctx.fillText(axisNames.map((name, i) => `${name} ${measured.value[i].toFixed(3)}m`).join('   '), 14 * ratio, 25 * ratio)
+  if (boundsVisible.value) for (const label of labels.value) {
+    ctx.fillStyle = label.color
+    ctx.fillText(label.text, label.x / 100 * canvas.width, label.y / 100 * canvas.height)
+  }
+  return canvas.toDataURL('image/png')
+}
 function startCapture() {
   if (!renderer || !ready.value || contextLost) { emit('cancelCapture'); return }
   try {
+    captureImage.value = getPreviewImage()
     controls.enabled = false
-    // Render and copy synchronously: the default WebGL buffer is cleared after compositing.
-    render()
-    const canvas = document.createElement('canvas')
-    canvas.width = renderer.domElement.width; canvas.height = renderer.domElement.height
-    const ctx = canvas.getContext('2d')!
-    ctx.drawImage(renderer.domElement, 0, 0)
-    const ratio = canvas.width / width
-    ctx.font = `${14 * ratio}px sans-serif`
-    ctx.fillStyle = '#fff'; ctx.fillRect(8 * ratio, 6 * ratio, Math.min(width - 16, 390) * ratio, 28 * ratio)
-    ctx.fillStyle = '#345a4e'
-    ctx.fillText(axisNames.map((name, i) => `${name} ${measured.value[i].toFixed(3)}m`).join('   '), 14 * ratio, 25 * ratio)
-    if (boundsVisible.value) for (const label of labels.value) {
-      ctx.fillStyle = label.color
-      ctx.fillText(label.text, label.x / 100 * canvas.width, label.y / 100 * canvas.height)
-    }
-    captureImage.value = canvas.toDataURL('image/png')
   } catch { emit('captureError', '三维截图失败，请刷新视图后重试') }
 }
 onMounted(() => {
@@ -208,7 +212,7 @@ watch(() => props.captureMode, active => {
   else { captureImage.value = ''; if (controls) controls.enabled = true }
 })
 watch(() => props.geometry, () => { captureImage.value = ''; emit('cancelCapture') })
-defineExpose({ ready })
+defineExpose({ ready, getPreviewImage })
 onBeforeUnmount(() => {
   observer?.disconnect()
   controls?.removeEventListener('change', render); controls?.dispose()

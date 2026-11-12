@@ -14,11 +14,15 @@ const props = withDefaults(
   defineProps<{
     items: GalleryItem[]
     startIndex?: number
+    /** 工作台影像预览铺满窗口，不受历史记录弹窗尺寸限制。 */
+    fullScreen?: boolean
   }>(),
   { startIndex: 0 },
 )
 
 const emit = defineEmits<{ close: [] }>()
+const dialogRef = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
 
 const index = ref(0)
 const scale = ref(1)
@@ -129,18 +133,27 @@ function onKey(e: KeyboardEvent) {
   else if (e.key === '0') resetView()
 }
 
-onMounted(() => window.addEventListener('keydown', onKey))
-onUnmounted(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  if (props.fullScreen) {
+    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    dialogRef.value?.focus()
+  }
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey)
+  if (previousFocus?.isConnected) previousFocus.focus()
+})
 </script>
 
 <template>
-  <Teleport to="#app-overlay-root">
-    <div class="gallery-overlay" @click.self="emit('close')">
-      <div class="gallery-dialog" role="dialog" aria-modal="true" @click.stop>
+  <Teleport :to="fullScreen ? 'body' : '#app-overlay-root'">
+    <div class="gallery-overlay" :class="{ 'is-fullscreen': fullScreen }" @click.self="emit('close')">
+      <div ref="dialogRef" class="gallery-dialog" role="dialog" tabindex="-1" aria-modal="true" :aria-label="current?.label || '大图预览'" @click.stop>
         <div class="gallery-titlebar">
           <span class="gallery-title">
             {{ current?.label || '大图' }}
-            <template v-if="items.length">
+            <template v-if="items.length > 1">
               （{{ index + 1 }} / {{ items.length }}）
             </template>
             <span class="zoom-tip">
@@ -148,11 +161,17 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               <template v-if="scale > 1"> · 按住拖动</template>
             </span>
           </span>
+          <div v-if="fullScreen" class="zoom-controls">
+            <button type="button" :disabled="scale <= 0.3" @click="zoomOut">缩小</button>
+            <button type="button" @click="resetView">适应窗口</button>
+            <button type="button" :disabled="scale >= 5" @click="zoomIn">放大</button>
+          </div>
           <button type="button" class="gallery-close" title="关闭" @click="emit('close')">×</button>
         </div>
 
-        <div class="gallery-stage" @wheel.prevent="onWheel">
+        <div class="gallery-stage" :class="{ 'single-image': items.length <= 1 }" @wheel.prevent="onWheel">
           <button
+            v-if="items.length > 1"
             type="button"
             class="nav-btn prev"
             :disabled="!canPrev"
@@ -179,6 +198,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
             <div v-else class="gallery-empty">暂无图片</div>
           </div>
           <button
+            v-if="items.length > 1"
             type="button"
             class="nav-btn next"
             :disabled="!canNext"
@@ -189,7 +209,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
           </button>
         </div>
 
-        <div v-if="items.length" class="gallery-strip">
+        <div v-if="items.length && !fullScreen" class="gallery-strip">
           <button
             v-for="(it, i) in items"
             :key="`${it.label}-${i}`"
@@ -230,6 +250,48 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.is-fullscreen {
+  padding: 0;
+  background: #1a1a1a;
+
+  .gallery-dialog {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+
+  .gallery-titlebar {
+    min-height: 48px;
+    height: auto;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 6px 12px;
+  }
+
+  .gallery-title { flex: 1; flex-wrap: wrap; }
+  .gallery-close { width: 40px; height: 40px; }
+  .gallery-main img { width: 100%; height: 100%; }
+}
+
+.zoom-controls {
+  display: flex;
+  gap: 8px;
+
+  button {
+    min-height: 36px;
+    padding: 4px 12px;
+    border: 1px solid #ffffff80;
+    border-radius: 4px;
+    color: #fff;
+    background: transparent;
+    cursor: pointer;
+
+    &:disabled { opacity: 0.4; cursor: default; }
+    &:hover:not(:disabled) { background: #ffffff20; }
+  }
 }
 
 .gallery-titlebar {
@@ -281,9 +343,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   gap: 4px;
   padding: 10px 6px;
   background: #1a1a1a;
+
+  &.single-image { grid-template-columns: minmax(0, 1fr); }
 }
 
 .gallery-main {
+  min-width: 0;
+  min-height: 0;
   height: 100%;
   display: flex;
   align-items: center;

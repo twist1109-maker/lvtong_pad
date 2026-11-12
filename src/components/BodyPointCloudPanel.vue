@@ -491,6 +491,12 @@ onUnmounted(() => {
 defineExpose({
   clearBoxes,
   ready,
+  getPreviewImage: () => {
+    const image = imgRef.value
+    if (!image || !ready.value) throw new Error('图片尚未加载，无法预览')
+    // 从已加载图像读取，临时接口过期后仍可查看；保留当前透视色阶与伪彩。
+    return cropLoadedImage(image, { x1: 0, y1: 0, x2: image.naturalWidth, y2: image.naturalHeight })
+  },
 })
 </script>
 
