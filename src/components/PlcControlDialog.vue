@@ -71,7 +71,7 @@ const switchFeedback = useDeviceSwitchFeedback({
   greenlight: false,
   filllight: false,
   soundalarm: false,
-})
+}, 3000)
 const { display: displayStates, pending: pendingSwitches, messages: feedbackMessages } = switchFeedback
 
 function applyStatus(d: Record<string, unknown>) {

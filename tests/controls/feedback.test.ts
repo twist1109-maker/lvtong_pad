@@ -9,6 +9,25 @@ function setup() {
   return { model, token }
 }
 
+test('手动开关3秒未确认恢复实态，栏杆在5秒前仍等待', () => {
+  const manual = new DeviceSwitchFeedback({ redlight: false }, 1000, 3000)
+  const { model: gate, token: gateToken } = setup()
+  const lightToken = manual.begin('redlight', true, 0)
+  manual.sent('redlight', lightToken, 100)
+  gate.sent('gate', gateToken, 100)
+  manual.advance(3099)
+  assert.ok(manual.pending.redlight)
+  manual.advance(3100)
+  assert.equal(manual.display().redlight, false)
+  assert.match(manual.messages.redlight!, /未收到目标状态/)
+  gate.advance(5099)
+  assert.equal(gate.display().gate, true)
+  assert.ok(gate.pending.gate)
+  gate.advance(5100)
+  assert.equal(gate.display().gate, false)
+  assert.equal(gate.pending.gate, undefined)
+})
+
 test('设备到位超过1秒时继续显示目标，新反馈确认后不经过旧状态', () => {
   const { model, token } = setup()
   model.sent('gate', token, 100)

@@ -1,8 +1,8 @@
 import { onUnmounted, shallowRef } from 'vue'
 import { DeviceSwitchFeedback } from '@/utils/deviceSwitchFeedback'
 
-export function useDeviceSwitchFeedback(initial: Record<string, boolean>) {
-  const model = new DeviceSwitchFeedback(initial)
+export function useDeviceSwitchFeedback(initial: Record<string, boolean>, waitMs = 5000) {
+  const model = new DeviceSwitchFeedback(initial, 1000, waitMs)
   const display = shallowRef(model.display())
   const pending = shallowRef<Record<string, boolean>>({})
   const messages = shallowRef<Record<string, string>>({})

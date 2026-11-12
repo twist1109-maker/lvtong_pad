@@ -86,7 +86,7 @@ const showAiStatus = ref(false)
 const showDeviceStatus = ref(false)
 /** 主页闸机图标 — 对齐 GateUIController */
 const gateOnline = ref(false)
-const gateFeedback = useDeviceSwitchFeedback({ gate: false })
+const gateFeedback = useDeviceSwitchFeedback({ gate: false }, 5000)
 const gateDisplayOpen = computed(() => gateFeedback.display.value.gate)
 const gateFeedbackPending = computed(() => !!gateFeedback.pending.value.gate)
 const gateFeedbackMessage = computed(() => gateFeedbackPending.value ? '等待设备反馈' : gateFeedback.messages.value.gate || '')
