@@ -23,6 +23,8 @@ const props = withDefaults(
     gateOnline?: boolean
     /** 栏杆抬起 */
     gateOpen?: boolean
+    gatePending?: boolean
+    gateMessage?: string
     /** 光机三态：空闲 / 预热 / 工作 */
     xrayPhase?: XrayMachinePhase
   }>(),
@@ -47,6 +49,7 @@ const gateIcon = computed(() => {
 })
 
 const gateTitle = computed(() => {
+  if (props.gateMessage) return props.gateMessage
   if (!props.gateOnline) return '栏杆机未连接'
   return props.gateOpen
     ? '栏杆机状态：开启\n点击切换开关状态'
@@ -82,6 +85,8 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
       <button
         v-for="item in items"
         :key="item.key"
+        :disabled="item.key === 'gate' && gatePending"
+        :aria-busy="item.key === 'gate' && gatePending"
         type="button"
         class="wf-btn"
         :class="{
@@ -109,7 +114,7 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
             pending: item.key === 'book' && bookingPending,
           }"
         >
-          {{ item.label }}
+          {{ item.key === 'gate' && gatePending ? '等待反馈' : item.key === 'gate' && gateMessage ? '状态未确认' : item.label }}
         </span>
       </button>
     </div>

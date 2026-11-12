@@ -10,6 +10,8 @@ defineProps<{
   distance?: number
   gateOnline?: boolean
   gateOpen?: boolean
+  gatePending?: boolean
+  gateMessage?: string
   xrayPhase?: XrayMachinePhase
   xrayBits?: PlcXrayBits
   signalLights?: PlcSignalLights
@@ -36,6 +38,8 @@ const emit = defineEmits<{
       :booking-pending="bookingPending"
       :gate-online="gateOnline"
       :gate-open="gateOpen"
+      :gate-pending="gatePending"
+      :gate-message="gateMessage"
       :xray-phase="xrayPhase"
       @click="emit('workflowClick', $event)"
     />

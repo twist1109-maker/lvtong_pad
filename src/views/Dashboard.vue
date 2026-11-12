@@ -4,7 +4,8 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
 import { getCurrentUserApi } from '@/api/auth'
-import { controlGateApi, fetchBodyRadarImageApi, getGateStatusApi, type BodyRadarCaptureStatus } from '@/api/device'
+import { controlGateApi, fetchBodyRadarImageApi, type BodyRadarCaptureStatus } from '@/api/device'
+import { useDeviceSwitchFeedback } from '@/composables/useDeviceSwitchFeedback'
 
 import AppHeader from '@/components/AppHeader.vue'
 import type { ToolAnchor } from '@/components/AppHeader.vue'
@@ -85,12 +86,13 @@ const showAiStatus = ref(false)
 const showDeviceStatus = ref(false)
 /** 主页闸机图标 — 对齐 GateUIController */
 const gateOnline = ref(false)
-const gateOpen = ref(false)
-const gatePreviewOpen = ref<boolean | null>(null)
-const gateDisplayOpen = computed(() => gatePreviewOpen.value ?? gateOpen.value)
-let gatePreviewTimer: ReturnType<typeof setTimeout> | undefined
+const gateFeedback = useDeviceSwitchFeedback({ gate: false })
+const gateDisplayOpen = computed(() => gateFeedback.display.value.gate)
+const gateFeedbackPending = computed(() => !!gateFeedback.pending.value.gate)
+const gateFeedbackMessage = computed(() => gateFeedbackPending.value ? '等待设备反馈' : gateFeedback.messages.value.gate || '')
 const gateBusy = ref(false)
 let gateStatusTimer: ReturnType<typeof setInterval> | null = null
+let lastGateFeedbackAt = 0
 /** 组播 XRSUP/XRSDOWN（或旧 XRAY200/160）→ 底栏光机读数 */
 const xrayTelemetry = ref({
   kv200: '-',
@@ -118,8 +120,13 @@ const xrayMachinePhase = computed<XrayMachinePhase>(() =>
 )
 
 function applyPlcDeviceStatus(data: Record<string, unknown>) {
+  const values: Record<string, boolean> = typeof data.stickdown === 'boolean' ? { gate: data.stickdown } : {}
+  if (!gateFeedback.feedback(values, data)) return false
+  lastGateFeedbackAt = Date.now()
+  gateOnline.value = gateFeedbackOnline(data)
   plcXrayBits.value = parsePlcXrayBits(data)
   plcSignalLights.value = parsePlcSignalLights(data)
+  return true
 }
 
 function _fmtXrayNum(v: unknown): string {
@@ -1640,11 +1647,6 @@ function handleBookingComing(msg: { data?: unknown }) {
   }
 }
 
-/** stickdown/bit6：1=抬起，0=落下 */
-function applyGateFromStickdown(stickdown: boolean) {
-  gateOpen.value = stickdown
-}
-
 function gateFeedbackOnline(data: Record<string, unknown>): boolean {
   const sensors = data.sensors as { bit: number; online: boolean | null }[] | undefined
   return data.fresh === true && sensors?.find(row => row.bit === 6)?.online === true
@@ -1660,66 +1662,47 @@ async function refreshSensorOnline() {
 }
 
 async function refreshGateStatus() {
-  try {
-    const res = await getGateStatusApi()
-    if (res.code === 0 && res.data) {
-      gateOnline.value = !!res.data.connected
-      if (typeof res.data.stickdown === 'boolean') {
-        applyGateFromStickdown(res.data.stickdown)
-      } else {
-        gateOpen.value = !!res.data.gateOpen
-      }
-    }
-  } catch {
-    gateOnline.value = false
-  }
+  await refreshGateFromPlcCache()
 }
 
-/** 打开页时回放最近一次 DEVICE，避免图标一直默认落下 */
+let gatePollInFlight = false
+/** 仅以带receivedAt的DEVICE为实态源，避免控制接口记忆值与组播互相覆盖。 */
 async function refreshGateFromPlcCache() {
+  if (gatePollInFlight) return
+  gatePollInFlight = true
   try {
-    const res = await request<Record<string, unknown> | null>('/device/plc-status')
+    const res = await request<Record<string, unknown> | null>('/device/plc-status', { timeout: 5000 })
     if (res.code === 0 && res.data) {
       applyPlcDeviceStatus(res.data)
-      if (typeof res.data.stickdown === 'boolean') {
-        applyGateFromStickdown(res.data.stickdown)
-        gateOnline.value = gateFeedbackOnline(res.data)
-      }
     }
   } catch {
-    /* 尚无缓存时忽略 */
-  }
+    if (Date.now() - lastGateFeedbackAt > 5000) gateOnline.value = false
+  } finally { gatePollInFlight = false }
 }
 
 /** 对齐 Qt GateUIController::onIconClicked：点击直接切换抬杆/落杆，无确认弹窗 */
 async function onGateIconClick() {
-  if (gateBusy.value) return
+  if (gateBusy.value || gateFeedbackPending.value) return
   if (!gateOnline.value) {
     console.warn('[gate] 栏杆机未连接')
     void refreshGateStatus()
     return
   }
   const targetOpen = !gateDisplayOpen.value
-  clearTimeout(gatePreviewTimer)
-  gatePreviewOpen.value = targetOpen
+  const token = gateFeedback.begin('gate', targetOpen)
   gateBusy.value = true
   try {
     // 以操作员看到的目标下发明确动作，避免快速再次点击时按旧反馈反向 toggle。
     const res = await controlGateApi(targetOpen ? 'open' : 'close')
     if (res.code === 0) {
       const d = res.data
-      if (d?.confirmed && typeof d.gateOpen === 'boolean') {
-        gateOpen.value = d.gateOpen
-        gateOnline.value = true
-      }
-      gatePreviewTimer = setTimeout(() => {
-        gatePreviewOpen.value = null
-        void refreshGateStatus()
-      }, 1000)
+      // 发送成功不代表实际到位，只接纳后续DEVICE反馈。
+      gateFeedback.sent('gate', token)
+      void refreshGateStatus()
       if (d && d.confirmed === false && d.sent) {
-        console.warn(
+        console.info(
           '[gate]',
-          res.message || '已发组播，但未看到栏杆状态变化（中间件可能未处理）',
+          '栏杆组播已发送，等待后续DEVICE反馈',
         )
       } else if (d && d.confirmed) {
         console.info('[gate]', res.message, d.packet, 'stickdown=', d.stickdown)
@@ -1727,12 +1710,12 @@ async function onGateIconClick() {
         console.info('[gate]', res.message)
       }
     } else {
-      gatePreviewOpen.value = null
+      gateFeedback.fail('gate', token)
       console.warn('[gate]', res.message || '栏杆控制失败')
       await refreshGateStatus()
     }
   } catch (e) {
-    gatePreviewOpen.value = null
+    gateFeedback.fail('gate', token)
     console.warn('[gate]', e instanceof Error ? e.message : '栏杆控制失败')
     await refreshGateStatus()
   } finally {
@@ -2191,7 +2174,7 @@ function setupWS() {
   wsStore.subscribe('plc_status', (msg) => {
     console.log('[WS] PLC状态:', msg.data)
     const data = msg.data as Record<string, unknown> | undefined
-    if (data) applyPlcDeviceStatus(data)
+    if (!data || !applyPlcDeviceStatus(data)) return
     const urgent =
       data?.urgentstop === true ||
       data?.urgentStop === true ||
@@ -2199,11 +2182,6 @@ function setupWS() {
     if (urgent && !openStopFlag.value) {
       openStopFlag.value = true
       showStopResetBox.value = true
-    }
-    // DEVICE cmd bit6 → 闸机图标（1=抬起，0=落下）
-    if (data && typeof data.stickdown === 'boolean') {
-      applyGateFromStickdown(data.stickdown)
-      gateOnline.value = gateFeedbackOnline(data)
     }
   })
 
@@ -2651,7 +2629,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  clearTimeout(gatePreviewTimer)
   document.removeEventListener('click', onXrayDocClick)
   window.clearTimeout(xrayApplyTimer)
   if (gateStatusTimer) {
@@ -2814,6 +2791,8 @@ const anyDialogOpen = computed(
             :distance="radarDistance"
             :gate-online="gateOnline"
             :gate-open="gateDisplayOpen"
+            :gate-pending="gateFeedbackPending || gateBusy"
+            :gate-message="gateFeedbackMessage"
             :xray-phase="xrayMachinePhase"
             :xray-bits="plcXrayBits"
             :signal-lights="plcSignalLights"

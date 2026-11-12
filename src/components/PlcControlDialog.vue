@@ -11,6 +11,7 @@ import { request } from '@/api/request'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
 import { parsePlcSignalLights } from '@/utils/plcXrayStatus'
 import { parsePlcVoiceStatus, voiceStatusText, type PlcVoiceStatus } from '@/utils/plcVoiceStatus'
+import { useDeviceSwitchFeedback } from '@/composables/useDeviceSwitchFeedback'
 
 const props = defineProps<{
   /** 对齐 Qt：btn_plccontrol 左下角全局坐标 */
@@ -63,7 +64,7 @@ const controlSwitches: SwitchItem[] = [
 /** 暂不展示 STATUS 反馈区；面板只保留可下发控制项 */
 const switches: SwitchItem[] = controlSwitches
 
-const states = ref<Record<string, boolean>>({
+const switchFeedback = useDeviceSwitchFeedback({
   urgentstop: false,
   redlight: false,
   yellowlight: false,
@@ -71,34 +72,14 @@ const states = ref<Record<string, boolean>>({
   filllight: false,
   soundalarm: false,
 })
-// DEVICE反馈始终写入states；操作预览独立保留1秒，避免旧反馈让图标来回闪。
-const previews = ref<Record<string, boolean>>({})
-const displayStates = computed(() => ({ ...states.value, ...previews.value }))
-const previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
-function clearPreview(key: string) {
-  clearTimeout(previewTimers.get(key))
-  previewTimers.delete(key)
-  delete previews.value[key]
-}
-function previewSwitch(key: string, next: boolean) {
-  clearPreview(key)
-  previews.value[key] = next
-  previewTimers.set(key, setTimeout(() => {
-    clearPreview(key)
-    void refreshPlcStatus()
-  }, 1000))
-}
+const { display: displayStates, pending: pendingSwitches, messages: feedbackMessages } = switchFeedback
 
 function applyStatus(d: Record<string, unknown>) {
+  const lights = parsePlcSignalLights(d)
+  if (!switchFeedback.feedback({ redlight: lights.red, yellowlight: lights.yellow, greenlight: lights.green, filllight: lights.fillLight,
+    soundalarm: !!(d.soundalarmCmd ?? d.soundalarm), urgentstop: !!(d.urgentStopStatus ?? d.urgentstop ?? d.urgentStopCmd) }, d)) return
   plcFeedbackFresh.value = d.fresh !== false
   voiceStatus.value = parsePlcVoiceStatus(plcFeedbackFresh.value ? d : {})
-  const lights = parsePlcSignalLights(d)
-  states.value.redlight = lights.red
-  states.value.yellowlight = lights.yellow
-  states.value.greenlight = lights.green
-  states.value.filllight = lights.fillLight
-  states.value.soundalarm = !!(d.soundalarmCmd ?? d.soundalarm)
-  states.value.urgentstop = !!(d.urgentStopStatus ?? d.urgentstop ?? d.urgentStopCmd)
 }
 
 function onWsPlcStatus(msg: { data?: unknown }) {
@@ -124,13 +105,16 @@ async function refreshRadiometer() {
 }
 
 async function refreshPlcStatus() {
+  if (statusPollInFlight) return
+  statusPollInFlight = true
   try {
-    const res = await request<Record<string, unknown> | null>('/device/plc-status')
-    if (res.data && typeof res.data === 'object') applyStatus(res.data)
+    const res = await request<Record<string, unknown> | null>('/device/plc-status', { timeout: 5000 })
+    if (res.code === 0 && res.data && typeof res.data === 'object') applyStatus(res.data)
   } catch {
     /* 无缓存 / 网络抖动时忽略 */
-  }
+  } finally { statusPollInFlight = false }
 }
+let statusPollInFlight = false
 
 onMounted(() => {
   // 先回放缓存，再订阅读取；DEVICE 相同寄存器只推一次，晚开面板会全灰
@@ -152,8 +136,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  previewTimers.forEach(timer => clearTimeout(timer))
-  previewTimers.clear()
   unsubRadiometer?.()
   document.removeEventListener('click', onSysMenuDocClick)
   if (statusPollTimer != null) {
@@ -170,14 +152,14 @@ const loadingKey = ref<string | null>(null)
 
 function onSwitchClick(item: SwitchItem) {
   if (item.readonly) return
-  if (confirmVisible.value || errorVisible.value || loadingKey.value) return
+  if (confirmVisible.value || errorVisible.value || loadingKey.value || pendingSwitches.value[item.key]) return
   const next = !displayStates.value[item.field]
   pending = { key: item.key, next }
   confirmMessage.value = next ? (item.tipOn || '') : (item.tipOff || '')
   confirmVisible.value = true
 }
 
-/** 确认后立即预览目标状态；1秒后恢复最新DEVICE反馈，发令失败则立即回退。 */
+/** 即时显示目标；至少保持1秒，并等待本次操作之后的新反馈确认。 */
 async function onConfirmYes() {
   confirmVisible.value = false
   if (!pending) return
@@ -187,7 +169,7 @@ async function onConfirmYes() {
 
   if (loadingKey.value) return
   loadingKey.value = key
-  previewSwitch(key, next)
+  const token = switchFeedback.begin(key, next)
 
   try {
     // POST /api/device/plc-control → { [key]: next }
@@ -196,8 +178,10 @@ async function onConfirmYes() {
       body: JSON.stringify({ [key]: next }),
     })
     if (result.code !== 0) throw new Error(result.message || 'PLC 控制指令发送失败')
+    switchFeedback.sent(key, token)
+    void refreshPlcStatus()
   } catch (e: any) {
-    clearPreview(key)
+    switchFeedback.fail(key, token)
     errorMessage.value = e?.message || 'PLC 控制指令发送失败'
     errorVisible.value = true
   } finally {
@@ -287,11 +271,11 @@ const dialogStyle = computed(() => {
           <button
             type="button"
             class="switch-btn"
-            :class="{ 'is-loading': loadingKey === item.key }"
+            :class="{ 'is-loading': loadingKey === item.key || pendingSwitches[item.key] }"
             :title="item.label"
-            :disabled="loadingKey !== null"
+            :disabled="loadingKey !== null || pendingSwitches[item.key]"
             :aria-pressed="displayStates[item.field]"
-            :aria-busy="loadingKey === item.key"
+            :aria-busy="loadingKey === item.key || !!pendingSwitches[item.key]"
             @click="onSwitchClick(item)"
           >
             <img
@@ -304,6 +288,7 @@ const dialogStyle = computed(() => {
 
       <div class="voice-feedback" aria-label="语音播报反馈" aria-live="polite">
         <div v-if="!plcFeedbackFresh" role="status">设备反馈已超时，开关显示为最后状态</div>
+        <div v-for="item in switches.filter(row => pendingSwitches[row.key] || feedbackMessages[row.key])" :key="item.key" role="status">{{ item.label }}：{{ pendingSwitches[item.key] ? '等待设备反馈' : feedbackMessages[item.key] }}</div>
         <div v-for="row in voiceRows" :key="row.key" class="voice-row">
           <span>{{ row.label }}</span>
           <span :class="{ playing: wsStore.isConnected && voiceStatus[row.key] === true }">
