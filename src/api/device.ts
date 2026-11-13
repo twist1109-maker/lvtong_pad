@@ -30,6 +30,15 @@ export interface VoiceChannelStatus {
   idle?: boolean
 }
 
+/** 球机拍照的前后串口语音提示；成功表示命令已发送。 */
+export function announceCaptureVoiceApi(step: 6 | 7 | 8) {
+  return request<{ step: number; text: string; sent: boolean }>('/device/voice/announce', {
+    method: 'POST',
+    body: JSON.stringify({ step }),
+    timeout: 7000,
+  })
+}
+
 /**
  * 读取摄像头 Web 预览配置
  * GET /api/device/<deviceId>/preview-config

@@ -3,9 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDeviceCamera } from '@/composables/useDeviceCamera'
 
 const props = defineProps<{ captureBlocked?: boolean; remaining: number }>()
-const emit = defineEmits<{ close: []; photo: [image: string] }>()
+const emit = defineEmits<{ close: []; photo: [image: string]; error: [message: string] }>()
 const visible = ref(false)
 const systemCapture = ref<HTMLInputElement | null>(null)
+const mobilePicker = ref<HTMLInputElement | null>(null)
+const mobilePending = ref(false)
 const preferSystemCamera = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 const mode = ref<'system' | 'web'>(preferSystemCamera ? 'system' : 'web')
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight, left: 0, top: 0 })
@@ -25,6 +27,7 @@ watch(() => props.captureBlocked, blocked => { if (blocked) blockedVersion++ }, 
 const camera = useDeviceCamera(video)
 const facing = ref<'user' | 'environment'>('environment')
 const error = ref('')
+watch(error, message => { if (message && !visible.value) emit('error', message) })
 const busy = ref(false)
 const latest = ref('')
 const added = ref(0)
@@ -47,7 +50,7 @@ async function flip() {
   await openCamera(true)
 }
 function addPhoto(image: string) {
-  if (disposed || !visible.value || props.remaining <= 0) return
+  if (disposed || (!visible.value && !mobilePending.value) || props.remaining <= 0) return
   latest.value = image
   added.value++
   emit('photo', image)
@@ -60,16 +63,16 @@ function shoot() {
 }
 async function selectAlbum(event: Event) {
   const input = event.target as HTMLInputElement
-  const fromCamera = input === systemCapture.value
+  const fromCamera = input === systemCapture.value || input === mobilePicker.value
   const request = session
   const files = Array.from(input.files || [])
   input.value = ''
-  if (!files.length) return
+  if (!files.length) { mobilePending.value = false; return }
   busy.value = true
   error.value = ''
   try {
     for (const file of files) {
-      if (disposed || !visible.value || request !== session || props.remaining <= 0) break
+      if (disposed || (!visible.value && !mobilePending.value) || request !== session || props.remaining <= 0) break
       if (fromCamera && (props.captureBlocked || captureBlockedVersion !== blockedVersion)) { error.value = '车道占用，已丢弃本次拍照'; break }
       const image = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
@@ -81,18 +84,24 @@ async function selectAlbum(event: Event) {
       const check = new Image()
       check.src = image
       await check.decode()
-      if (disposed || !visible.value || request !== session) break
+      if (disposed || (!visible.value && !mobilePending.value) || request !== session) break
       if (fromCamera && (props.captureBlocked || captureBlockedVersion !== blockedVersion)) { error.value = '车道占用，已丢弃本次拍照'; break }
       addPhoto(image)
       // 等父组件更新剩余数量，批量选择不能超过图片上限。
       await nextTick()
     }
   } catch { if (request === session) error.value = '图片无法读取，请选择浏览器支持的照片（如 JPG、PNG）' }
-  finally { if (request === session) busy.value = false }
+  finally {
+    if (request === session) {
+      busy.value = false
+      mobilePending.value = false
+    }
+  }
 }
 function close() {
   session++
   visible.value = false
+  mobilePending.value = false
   camera.stop()
   busy.value = false
   previousFocus?.focus()
@@ -109,14 +118,27 @@ function requestSystemCapture() {
   systemCapture.value?.click()
 }
 function open(fromClick = false) {
+  if (busy.value) return
   session++
   previousFocus = document.activeElement as HTMLElement | null
-  visible.value = true
+  visible.value = !preferSystemCamera
   mode.value = preferSystemCamera ? 'system' : 'web'
   added.value = 0
   latest.value = ''
   error.value = ''
   busy.value = false
+  mobilePending.value = false
+  if (preferSystemCamera) {
+    // 移动端仅调用系统来源选择器，不渲染网页相机或中转页。
+    // 不带capture且单选，让系统保留拍照与相册两种来源。
+    if (fromClick && props.remaining > 0) {
+      mobilePending.value = true
+      captureBlockedVersion = blockedVersion
+      if (props.captureBlocked) album.value?.click()
+      else mobilePicker.value?.click()
+    }
+    return
+  }
   resizeViewport()
   if (mode.value === 'system' && fromClick) requestSystemCapture()
   void nextTick().then(() => {
@@ -197,7 +219,8 @@ defineExpose({ open, close })
     </section>
     <!-- 两个入口分开：系统拍摄指定后置镜头；相册入口不带capture，以保留系统相册。 -->
     <input ref="systemCapture" class="local-camera-file" type="file" accept="image/*" capture="environment" aria-label="系统相机拍照" @change="selectAlbum" />
-    <input ref="album" class="local-camera-file" type="file" accept="image/*" :multiple="remaining > 1" aria-label="选择相册照片" @change="selectAlbum" />
+    <input ref="mobilePicker" class="local-camera-file" type="file" accept="image/*" aria-label="拍照或选择相册" @change="selectAlbum" @cancel="mobilePending = false" />
+    <input ref="album" class="local-camera-file" type="file" accept="image/*" :multiple="remaining > 1" aria-label="选择相册照片" @change="selectAlbum" @cancel="mobilePending = false" />
   </Teleport>
 </template>
 

@@ -17,6 +17,7 @@ import LocalCameraFullscreen from './LocalCameraFullscreen.vue'
 import {
   controlPtzApi,
   controlPtzPresetApi,
+  announceCaptureVoiceApi,
   type PtzDirection,
 } from '@/api/device'
 
@@ -64,6 +65,28 @@ const thumbH = 110
 const activeCamera = ref<string>(DEFAULT_CAMERA[props.kind])
 /** 对齐 switchToCamera：仅球机显示云台 */
 const showPtz = computed(() => activeCamera.value === '球机')
+const captureVoices = [
+  { step: 6, label: '开车门', text: '请打开车门', icon: '/assets/img/capture-voice-open.png' },
+  { step: 7, label: '勿遮挡', text: '请勿遮挡车厢', icon: '/assets/img/capture-voice-clear.png' },
+  { step: 8, label: '完成', text: '拍摄完成，请关好车门', icon: '/assets/img/capture-voice-done.png' },
+] as const
+const voiceBusy = ref(false)
+const voiceHint = ref('')
+const voiceFailed = ref(false)
+async function announceCaptureVoice(step: 6 | 7 | 8) {
+  if (voiceBusy.value || closing.value || !showPtz.value) return
+  voiceBusy.value = true
+  voiceFailed.value = false
+  voiceHint.value = '正在发送语音…'
+  try {
+    const response = await announceCaptureVoiceApi(step)
+    if (response.code !== 0 || !response.data?.sent) throw new Error(response.message || '语音命令发送失败')
+    voiceHint.value = `语音命令已发送：${response.data.text}`
+  } catch (error) {
+    voiceFailed.value = true
+    voiceHint.value = error instanceof Error ? error.message : '语音发送失败，请重试'
+  } finally { voiceBusy.value = false }
+}
 const useWhepPreview = computed(() => activeCamera.value !== DEVICE_CAMERA)
 const switchingCamera = ref(false)
 let previewSelectionVersion = 0
@@ -291,7 +314,7 @@ onBeforeUnmount(() => {
 })
 
 async function selectCamera(name: string) {
-  if (isCameraDisabled(name) || switchingCamera.value || closing.value) return
+  if (isCameraDisabled(name) || (switchingCamera.value && name !== DEVICE_CAMERA) || closing.value) return
   previewSelectionVersion++
   if (name === DEVICE_CAMERA) {
     stopActivePtz()
@@ -559,6 +582,15 @@ function openPreview() {
             <span class="count">{{ countText }}</span>
             <button type="button" class="btn-del" @click="onDeleteSelected">选中删除</button>
           </div>
+          <div v-if="showPtz" class="capture-voice-controls">
+            <div class="capture-voice-buttons" aria-label="球机语音提示">
+              <button v-for="voice in captureVoices" :key="voice.step" type="button" :title="voice.text" :aria-label="voice.text" :disabled="voiceBusy || closing" @click="announceCaptureVoice(voice.step)">
+                <img :src="voice.icon" alt="" />
+                <span>{{ voice.label }}</span>
+              </button>
+            </div>
+            <p v-if="voiceHint" class="capture-voice-hint" :class="{ failed: voiceFailed }" role="status">{{ voiceHint }}</p>
+          </div>
         </section>
 
         <!-- ========== 右栏 ========== -->
@@ -569,8 +601,8 @@ function openPreview() {
               :key="cam"
               type="button"
               class="cam-tab"
-              :class="{ on: activeCamera === cam, disabled: isCameraDisabled(cam) || switchingCamera }"
-              :disabled="isCameraDisabled(cam) || switchingCamera"
+              :class="{ on: activeCamera === cam, disabled: isCameraDisabled(cam) || (switchingCamera && cam !== DEVICE_CAMERA) }"
+              :disabled="isCameraDisabled(cam) || (switchingCamera && cam !== DEVICE_CAMERA)"
               :aria-pressed="activeCamera === cam"
               @click="selectCamera(cam)"
             >
@@ -803,10 +835,20 @@ function openPreview() {
     :capture-blocked="captureBlocked"
     :remaining="isMulti ? Math.max(0, maxCount - photos.length) : 1"
     @photo="pushPhoto"
+    @error="captureError = $event"
   />
 </template>
 
 <style scoped lang="scss">
+.capture-voice-controls { flex-shrink: 0; padding-top: 8px; }
+.capture-voice-buttons { display: flex; justify-content: space-between; gap: 16px; }
+.capture-voice-buttons button { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; min-height: 56px; padding: 6px 20px; border: 1px solid #bdd9cf; border-radius: 8px; background: #fff; color: #326c5b; font: inherit; font-size: 16px; cursor: pointer; }
+.capture-voice-buttons img { width: 44px; height: 44px; object-fit: contain; }
+.capture-voice-buttons button:disabled { opacity: .5; cursor: default; }
+.capture-voice-buttons button:hover:enabled { background: #e1f1e9; }
+.capture-voice-buttons button:focus-visible { outline: 2px solid #1677ff; outline-offset: 2px; }
+.capture-voice-hint { margin-top: 4px; font-size: 13px; color: #326c5b; }
+.capture-voice-hint.failed { color: #c0392b; }
 .local-camera-launch { margin: auto; padding: 18px; color: #326c5b; background: #e1f1e9; border: 1px solid #bdd9cf; border-radius: 8px; font: inherit; cursor: pointer; }
 .cap-overlay {
   position: fixed;
