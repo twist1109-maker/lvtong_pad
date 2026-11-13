@@ -360,9 +360,6 @@ const bodyRadarStatusText = computed(() => {
     default: return '等待车辆几何采集'
   }
 })
-function bodyRadarForSave(view: 'top' | 'side') {
-  return bodyImageUrls.value[view]
-}
 
 /** 车身图无图时的占位：车道占用(红) → 等待驶入(绿) → 默认 */
 const laneOccupied = ref(false)
@@ -1156,8 +1153,6 @@ function openEvidencePicker() {
     list.forEach((src, i) => add(`${key === 'goods' ? '货物照' : '证据照'}${i + 1}`, src))
   }
   add('车身图', bodyImageUrls.value.body)
-  add('车顶投影', bodyImageUrls.value.top)
-  add('车侧投影', bodyImageUrls.value.side)
   for (const view of XRAY_VIEW_ORDER) add(`透视${XRAY_VIEW_LABELS[view]}`, xrayImageUrls.value[view])
   const panel = bodyView.value === 'cloud' ? bodyCloudPanelRef.value : bodyPcPanelRef.value
   for (const [label, imagePanel] of [[`当前${bodyViewLabel.value}`, panel], [`当前透视${xrayViewLabel.value}`, xrayBoxPanelRef.value]] as const) {
@@ -1941,8 +1936,8 @@ function buildSubmitPreview(): InspectionDetail {
     tail_image_path: toApiUrl(captureThumbs.value.tail || '') || undefined,
     top_image_path: toApiUrl(resolveTopImageRef()) || undefined,
     body_image_path: toApiUrl(bodyImageUrls.value.body || '') || undefined,
-    radar_side_image_path: toApiUrl(bodyRadarForSave('side')) || undefined,
-    radar_top_image_path: toApiUrl(bodyRadarForSave('top')) || undefined,
+    radar_side_image_path: '',
+    radar_top_image_path: '',
     radar_head_image_path: toApiUrl(bookingStore.radarHeadImageUrl || '') || undefined,
     transparent_image_path:
       toApiUrl(xrayDisplayUrl.value || xrayImageUrls.value['200'] || '') || undefined,
@@ -2081,9 +2076,9 @@ async function onSubmitConfirmYes(payload?: {
     body_image_path: toStoragePath(bodyImageUrls.value.body || ''),
     // 车顶：图像采集区域（与预览一致），不用车身影像雷达测顶
     top_image_path: toStoragePath(resolveTopImageRef()),
-    // 雷达三图：车侧/车顶来自车身影像；车头来自预约受理图
-    radar_side_image_path: toStoragePath(bodyRadarForSave('side')),
-    radar_top_image_path: toStoragePath(bodyRadarForSave('top')),
+    // 车顶/车侧投影不再作为记录图片；3D点云与尺寸测量继续显示。
+    radar_side_image_path: '',
+    radar_top_image_path: '',
     radar_head_image_path: toStoragePath(bookingStore.radarHeadImageUrl || ''),
     transparent_image_path: toStoragePath(xrayImageUrls.value['200'] || ''),
     // 通行码 QR 图（对齐 Qt m_codeImagePath，flask 后端生成）

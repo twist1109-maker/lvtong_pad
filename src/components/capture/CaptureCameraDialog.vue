@@ -469,11 +469,12 @@ function captureFromWhepVideo(): string {
     throw new Error('画面未就绪')
   }
   const canvas = document.createElement('canvas')
-  canvas.width = video.videoWidth
+  const left = activeCamera.value === '车顶相机' ? Math.floor(video.videoWidth / 3) : 0
+  canvas.width = video.videoWidth - left
   canvas.height = video.videoHeight
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('无法截帧')
-  ctx.drawImage(video, 0, 0)
+  ctx.drawImage(video, left, 0, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height)
   return canvas.toDataURL('image/jpeg', 0.92)
 }
 
