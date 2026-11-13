@@ -14,6 +14,8 @@ import type { CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
 const BodyCloud3DPanel = defineAsyncComponent(() => import('@/components/BodyCloud3DPanel.vue'))
 import PreviewButton from '@/components/PreviewButton.vue'
 import ImageGalleryDialog, { type GalleryItem } from '@/components/common/ImageGalleryDialog.vue'
+import EvidenceImagePicker from '@/components/capture/EvidenceImagePicker.vue'
+import { evidenceCandidates, appendEvidence, type EvidenceCandidate, type EvidenceChoice } from '@/utils/evidenceSelection'
 import BottomWorkflowPanel from '@/components/BottomWorkflowPanel.vue'
 import type { WorkflowStepKey } from '@/components/WorkflowIcons.vue'
 import {
@@ -1101,19 +1103,20 @@ async function onXrayBoxCrop(payload: CropBoxPayload) {
   }
 }
 
-/** 「勾」：追加到证据照，保留已有照片；图片数据在提交时落库。 */
-function onConfirmCropToEvidence() {
+/** 「勾」：车身/3D/透视截图统一追加货物照，保留原有图片。 */
+function onConfirmCropToGoods() {
   if (!liveCropPreviewUrl.value) return
   cropReqSeq++
-  const existing = captureLists.value.evidence.length ? captureLists.value.evidence
-    : captureThumbs.value.evidence ? [captureThumbs.value.evidence] : []
+  const existing = captureLists.value.goods.length ? captureLists.value.goods
+    : captureThumbs.value.goods ? [captureThumbs.value.goods] : []
+  cropGoodsImages.add(liveCropPreviewUrl.value)
   const next = [...existing, liveCropPreviewUrl.value]
-  captureLists.value = { ...captureLists.value, evidence: next }
-  captureThumbs.value = { ...captureThumbs.value, evidence: next[next.length - 1] || '' }
+  captureLists.value = { ...captureLists.value, goods: next }
+  captureThumbs.value = { ...captureThumbs.value, goods: next[next.length - 1] || '' }
   liveCropPreviewUrl.value = ''
   bodyPcPanelRef.value?.clearBoxes()
   xrayBoxPanelRef.value?.clearBoxes()
-  console.info('[Dashboard] 框图已追加到证据照:', next.length)
+  console.info('[Dashboard] 框图已追加到货物照:', next.length)
 }
 
 /** 「×」：清除框图预览 + 车身/透视上的框 */
@@ -1134,6 +1137,47 @@ const captureLists = ref<{ goods: string[]; evidence: string[] }>({
   goods: [],
   evidence: [],
 })
+const cropGoodsImages = new Set<string>()
+const evidenceSourceKeys = new Set<string>()
+const evidencePickerItems = shallowRef<EvidenceCandidate[] | null>(null)
+
+function openEvidencePicker() {
+  const images: GalleryItem[] = []
+  function add(label: string, src?: string) { if (src) images.push({ label, src: toImageUrl(src) }) }
+  for (const key of ['head', 'tail', 'top', 'passcode'] as const) {
+    add({ head: '车头', tail: '车尾', top: '车顶', passcode: '通行码' }[key], captureThumbs.value[key])
+  }
+  add('主行驶证', licensePaths.value.license || captureThumbs.value.license)
+  add('挂车行驶证', licensePaths.value.licenseGc)
+  add('拼接行驶证', licensePaths.value.licenseStitched)
+  for (const key of ['goods', 'evidence'] as const) {
+    const list = captureLists.value[key].length ? captureLists.value[key] : [captureThumbs.value[key] || '']
+    list.forEach((src, i) => add(`${key === 'goods' ? '货物照' : '证据照'}${i + 1}`, src))
+  }
+  add('车身图', bodyImageUrls.value.body)
+  add('车顶投影', bodyImageUrls.value.top)
+  add('车侧投影', bodyImageUrls.value.side)
+  for (const view of XRAY_VIEW_ORDER) add(`透视${XRAY_VIEW_LABELS[view]}`, xrayImageUrls.value[view])
+  const panel = bodyView.value === 'cloud' ? bodyCloudPanelRef.value : bodyPcPanelRef.value
+  for (const [label, imagePanel] of [[`当前${bodyViewLabel.value}`, panel], [`当前透视${xrayViewLabel.value}`, xrayBoxPanelRef.value]] as const) {
+    if (imagePanel?.ready) {
+      try { add(label, imagePanel.getPreviewImage()) } catch { /* 原始图片仍可选择 */ }
+    }
+  }
+  add('待确认截图', liveCropPreviewUrl.value)
+  const existing = [...captureLists.value.evidence, captureThumbs.value.evidence || ''].filter(Boolean).map(toImageUrl)
+  evidencePickerItems.value = evidenceCandidates(images, [...existing, ...evidenceSourceKeys])
+}
+
+function onEvidenceImagesConfirm(choices: EvidenceChoice[]) {
+  const existing = captureLists.value.evidence.length ? captureLists.value.evidence
+    : captureThumbs.value.evidence ? [captureThumbs.value.evidence] : []
+  const next = appendEvidence(existing, choices, evidenceSourceKeys)
+  next.sources.forEach(src => evidenceSourceKeys.add(src))
+  captureLists.value = { ...captureLists.value, evidence: next.images }
+  captureThumbs.value = { ...captureThumbs.value, evidence: next.images[next.images.length - 1] || '' }
+  evidencePickerItems.value = null
+}
 
 /** 将 AI 货物列表回填到表单（与农产品选择器同结构） */
 function applyAiGoodsFill(
@@ -1226,7 +1270,8 @@ function scheduleAiGoodsReal() {
   if (aiGoodsRealTimer) clearTimeout(aiGoodsRealTimer)
   aiGoodsRealTimer = setTimeout(() => {
     aiGoodsRealTimer = null
-    const list = captureLists.value.goods || []
+    // 框选截图可为透视/3D，不把它作为相机实物图再次发送AI实物识别。
+    const list = (captureLists.value.goods || []).filter(src => !cropGoodsImages.has(src))
     const url = list[list.length - 1] || ''
     if (!url) return
     const key = list.join('|')
@@ -1236,7 +1281,7 @@ function scheduleAiGoodsReal() {
 }
 
 watch(
-  () => (captureLists.value.goods || []).join('|'),
+  () => (captureLists.value.goods || []).filter(src => !cropGoodsImages.has(src)).join('|'),
   (key) => {
     if (!key) {
       aiGoodsRealLastKey = ''
@@ -1539,6 +1584,10 @@ function toImageUrl(reference: string | undefined | null): string {
 const captureDialogInitial = ref<string[]>([])
 
 function onCaptureClick(key: CaptureKey) {
+  if (key === 'evidence') {
+    openEvidencePicker()
+    return
+  }
   if (key === 'license') {
     showLicenseDialog.value = true
     return
@@ -1771,6 +1820,9 @@ function doReset() {
   // 清图片（对齐 Qt clearFormData 清除所有图片缩略图）
   captureThumbs.value = {}
   captureLists.value = { goods: [], evidence: [] }
+  evidencePickerItems.value = null
+  evidenceSourceKeys.clear()
+  cropGoodsImages.clear()
   submitRemark.value = ''
   licensePaths.value = { license: '', licenseGc: '', licenseStitched: '' }
   weightRangeHint.value = ''
@@ -2656,6 +2708,7 @@ const anyDialogOpen = computed(
     showUsrMgrDenied.value ||
     showCarSize.value ||
     captureDialog.value !== null ||
+    evidencePickerItems.value !== null ||
     showLicenseDialog.value ||
     showPasscodeScan.value ||
     showStopConfirmBox.value ||
@@ -2833,9 +2886,9 @@ const anyDialogOpen = computed(
               type="button"
               class="header-icon-btn"
               :class="{ disabled: !liveCropPreviewUrl }"
-              :title="liveCropPreviewUrl ? '追加到证据照' : '当前无裁切预览'"
+              :title="liveCropPreviewUrl ? '追加到货物照' : '当前无裁切预览'"
               :disabled="!liveCropPreviewUrl"
-              @click="onConfirmCropToEvidence"
+              @click="onConfirmCropToGoods"
             >
               <img src="/assets/img/good_save.png" alt="" />
             </button>
@@ -3108,6 +3161,8 @@ const anyDialogOpen = computed(
       @confirm="(imgs) => onCaptureConfirm(captureDialog!, imgs)"
       @close="captureDialog = null"
     />
+
+    <EvidenceImagePicker v-if="evidencePickerItems" :items="evidencePickerItems" @confirm="onEvidenceImagesConfirm" @close="evidencePickerItems = null" />
 
     <!-- 行驶证 — 对齐 GetDrivingPicDialog -->
     <DrivingLicenseDialog

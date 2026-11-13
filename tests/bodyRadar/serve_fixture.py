@@ -36,6 +36,12 @@ cv2.putText(xray_image,'XRAY FIXTURE',(300,400),cv2.FONT_HERSHEY_SIMPLEX,2,255,4
 _,xray_encoded=cv2.imencode('.png',xray_image)
 xray=cache.put_and_url(xray_encoded.tobytes(),'image/png')
 photo='data:image/png;base64,'+base64.b64encode(encoded.tobytes()).decode()
+def labeled_photo(label):
+ sample=image.copy()
+ cv2.putText(sample,label,(150,150),cv2.FONT_HERSHEY_SIMPLEX,2,(255,255,255),4)
+ _,data=cv2.imencode('.png',sample)
+ return 'data:image/png;base64,'+base64.b64encode(data.tobytes()).decode()
+seed_photos={key:labeled_photo(key) for key in ('head','tail','top','goods','license','license-gc','passcode','evidence1','evidence2')}
 artifacts=Path(__file__).resolve().parents[1]/'layout/artifacts';artifacts.mkdir(exist_ok=True)
 storage=tempfile.TemporaryDirectory(prefix='lvtong-crop-test-')
 import app.services.image_store as image_store
@@ -104,7 +110,7 @@ def message(data):
    for entry in cache._CACHE.values():entry.created_at-=3*60*60
   print('ISOLATED expired cache; browser keeps the displayed image',flush=True)
  elif data['type']=='fixture_capture_seed':
-  io.emit('message',{'type':'mobile_upload','data':{'phone':'13800000000','goods_type':'10101','head_image_path':photo,'tail_image_path':photo,'license_image_path1':photo,'passcode_image_path':photo,'goods_image_path':photo,'evidences_image_path':photo+'|'+photo}})
+  io.emit('message',{'type':'mobile_upload','data':{'phone':'13800000000','goods_type':'10101','head_image_path':seed_photos['head'],'tail_image_path':seed_photos['tail'],'top_image_path':seed_photos['top'],'license_image_path1':seed_photos['license'],'license_image_path2':seed_photos['license-gc'],'passcode_image_path':seed_photos['passcode'],'goods_image_path':seed_photos['goods'],'evidences_image_path':seed_photos['evidence1']+'|'+seed_photos['evidence2']}})
   io.emit('message',{'type':'mobile_passcode','data':{'valid':True,'vehicleId':'鄂A12345_1','vehicleDisplayId':'鄂A12345','vehicleColorName':'1','enStationId':'entry','exStationId':'exit','enWeight':'20000','exWeight':'20000','mediaTypeId':2,'transactionId':'fixture-transaction','passId':'fixture-pass','exTime':'2026-11-10 12:00:00','transPayTypeId':1,'fee':'100','payFee':'100','vehicleSignId':2,'provinceCount':'1'}})
 io.run(app,host='127.0.0.1',port=5194,allow_unsafe_werkzeug=True)
 
