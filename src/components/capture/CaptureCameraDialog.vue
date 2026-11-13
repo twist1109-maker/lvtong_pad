@@ -66,13 +66,14 @@ const activeCamera = ref<string>(DEFAULT_CAMERA[props.kind])
 const showPtz = computed(() => activeCamera.value === '球机')
 const useWhepPreview = computed(() => activeCamera.value !== DEVICE_CAMERA)
 const switchingCamera = ref(false)
+let previewSelectionVersion = 0
 
 const photos = ref<string[]>([])
 const selectedIndex = ref(0)
 const capturing = ref(false)
 const closing = ref(false)
 const whepVideoRef = ref<HTMLVideoElement | null>(null)
-const localCameraOpen = ref(false)
+const localCameraRef = ref<{ open: (fromClick?: boolean) => void; close: () => void } | null>(null)
 const captureError = ref('')
 
 const {
@@ -86,7 +87,7 @@ const liveHint = computed(() => {
   if (props.captureBlocked) return '车道占用，已暂停拍照'
   if (captureError.value) return captureError.value
   if (!useWhepPreview.value) {
-    return '点击打开全屏本地相机，可拍照或选择相册'
+    return '点击打开本地相机，可拍照或选择相册'
   }
   if (whepError.value) return whepError.value
   if (whepStatus.value === 'connecting') return '连接中…'
@@ -257,26 +258,27 @@ async function applyPreviewForCamera(name: string) {
   captureError.value = ''
   if (name === DEVICE_CAMERA) {
     await stopWhep()
-    if (!closing.value) localCameraOpen.value = true
+    if (!closing.value) localCameraRef.value?.open()
   } else {
-    localCameraOpen.value = false
+    localCameraRef.value?.close()
     await startWhepPreview(name)
   }
 }
 
 onMounted(async () => {
+  const selection = previewSelectionVersion
   syncKind()
   loadPresetConfigured(PTZ_DEVICE_ID)
   window.addEventListener('keydown', onPresetKeydown)
   window.addEventListener('blur', stopActivePtz)
   await nextTick()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  if (closing.value) return
+  if (closing.value || selection !== previewSelectionVersion) return
   await applyPreviewForCamera(activeCamera.value)
 })
 
 function detachPreview() {
-  localCameraOpen.value = false
+  localCameraRef.value?.close()
   void stopWhep()
 }
 
@@ -290,7 +292,15 @@ onBeforeUnmount(() => {
 
 async function selectCamera(name: string) {
   if (isCameraDisabled(name) || switchingCamera.value || closing.value) return
-  if (name === DEVICE_CAMERA && name === activeCamera.value) { localCameraOpen.value = true; return }
+  previewSelectionVersion++
+  if (name === DEVICE_CAMERA) {
+    stopActivePtz()
+    activeCamera.value = name
+    captureError.value = ''
+    localCameraRef.value?.open(true)
+    void stopWhep()
+    return
+  }
   if (name === activeCamera.value && previewPlaying.value) return
 
   const prevName = activeCamera.value
@@ -446,7 +456,7 @@ function captureFromWhepVideo(): string {
 
 async function onCaptureClick() {
   if (capturing.value || closing.value) return
-  if (!useWhepPreview.value) { localCameraOpen.value = true; return }
+  if (!useWhepPreview.value) { localCameraRef.value?.open(true); return }
   if (props.captureBlocked) return
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
@@ -570,7 +580,7 @@ function openPreview() {
 
           <div class="live-wrap">
             <div class="live-stage">
-              <button v-if="!useWhepPreview" type="button" class="local-camera-launch" @click="localCameraOpen = true">打开全屏本地相机</button>
+              <button v-if="!useWhepPreview" type="button" class="local-camera-launch" @click="localCameraRef?.open(true)">打开本地相机</button>
               <video
                 v-show="useWhepPreview"
                 ref="whepVideoRef"
@@ -789,11 +799,10 @@ function openPreview() {
   </div>
   </Teleport>
   <LocalCameraFullscreen
-    v-if="localCameraOpen"
+    ref="localCameraRef"
     :capture-blocked="captureBlocked"
     :remaining="isMulti ? Math.max(0, maxCount - photos.length) : 1"
     @photo="pushPhoto"
-    @close="localCameraOpen = false"
   />
 </template>
 
