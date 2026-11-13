@@ -53,7 +53,7 @@ export interface BookingAcceptPayload {
   linePosition: number
   /** 受理时间 ISO，对齐 acceptanceTime */
   acceptanceTime?: string
-  /** 预约界面车头雷达图（临时 URL / dataUrl），提交时落库 radar_head_image_path */
+  /** 预约界面车头雷达图（临时 URL / dataUrl），提交时落库 appointment_radar_image_path */
   radarHeadImageUrl?: string
 }
 

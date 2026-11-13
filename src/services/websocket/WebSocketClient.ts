@@ -40,6 +40,7 @@ export class WebSocketClient {
     }
 
     this.socket = io(url, {
+      auth: (callback) => callback({ token: localStorage.getItem('lvtong_token') || sessionStorage.getItem('lvtong_token') || '' }),
       path: this.options.url.startsWith('/') ? this.options.url : '/socket.io',
       transports: ['websocket', 'polling'],
       reconnection: true,

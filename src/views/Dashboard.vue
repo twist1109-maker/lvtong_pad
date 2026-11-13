@@ -3,6 +3,8 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
+import { InspectionSessionSync, materializeDraftImages, type Draft, type SessionSnapshot } from '@/services/inspectionSessionSync'
+import { setInspectionSessionId, getInspectionSessionId, getInspectionClientId } from '@/services/inspectionSessionContext'
 import { getCurrentUserApi } from '@/api/auth'
 import { controlGateApi, fetchBodyRadarImageApi, type BodyRadarCaptureStatus } from '@/api/device'
 import { useDeviceSwitchFeedback } from '@/composables/useDeviceSwitchFeedback'
@@ -65,6 +67,12 @@ const auth = useAuthStore()
 const wsStore = useWsStore()
 const bookingStore = useBookingStore()
 const router = useRouter()
+const syncReady = ref(appConfig.useMock)
+const syncMessage = ref('正在恢复当前检测…')
+const syncError = ref(false)
+let applyingSharedDraft = false
+const radarCloudImageUrl = ref('')
+let sharedGeometryUrl = ''
 
 const showHistory = ref(false)
 /** 左下第四个“拍照”流程图标：周界相机 A 纯视频。 */
@@ -400,6 +408,14 @@ let bodyRadarRefreshQueued = false
 let bodyRadarLoadedFrame = -1
 
 async function ensureBodyRadarImage(refresh = false) {
+  if (!appConfig.useMock) {
+    if (!syncReady.value) return
+    try {
+      await sharedSession.restore()
+      if (sharedSession.snapshot) await loadSharedGeometry(sharedSession.snapshot, refresh)
+    } catch (e) { bodyProjectionError.value = e instanceof Error ? e.message : '点云恢复失败' }
+    return
+  }
   if (!refresh && bodyCloudGeometry.value) return
   if (bodyRadarFetching.value.top || bodyRadarFetching.value.side) {
     if (refresh) bodyRadarRefreshQueued = true
@@ -610,6 +626,7 @@ async function runAiLoadRateSilent(mosaic: string, containerCode: string, contai
 }
 
 function scheduleAiLoadRate() {
+  if (applyingSharedDraft) return
   if (aiLoadRateTimer) clearTimeout(aiLoadRateTimer)
   aiLoadRateTimer = setTimeout(() => {
     aiLoadRateTimer = null
@@ -751,6 +768,7 @@ async function runAiTruckRealSilent(bodyUrl: string) {
 }
 
 function scheduleAiTruckReal() {
+  if (applyingSharedDraft) return
   if (aiTruckRealTimer) clearTimeout(aiTruckRealTimer)
   aiTruckRealTimer = setTimeout(() => {
     aiTruckRealTimer = null
@@ -1264,6 +1282,7 @@ async function runAiGoodsRealSilent(imageUrl: string, key: string) {
 }
 
 function scheduleAiGoodsReal() {
+  if (applyingSharedDraft) return
   if (aiGoodsRealTimer) clearTimeout(aiGoodsRealTimer)
   aiGoodsRealTimer = setTimeout(() => {
     aiGoodsRealTimer = null
@@ -1312,6 +1331,7 @@ async function runAiGoodsXraySilent(mosaic: string) {
 }
 
 function scheduleAiGoodsXray() {
+  if (applyingSharedDraft) return
   if (aiGoodsXrayTimer) clearTimeout(aiGoodsXrayTimer)
   aiGoodsXrayTimer = setTimeout(() => {
     aiGoodsXrayTimer = null
@@ -1502,6 +1522,7 @@ async function runAiLicenseCropSilent(mainSrc: string, hangSrc: string) {
 }
 
 function scheduleAiLicenseCrop() {
+  if (applyingSharedDraft) return
   if (aiLicenseCropTimer) clearTimeout(aiLicenseCropTimer)
   // 稍等挂车证可能随后到达（移动端常分两次上传）；弹窗关窗回写也会走这里
   aiLicenseCropTimer = setTimeout(() => {
@@ -1626,14 +1647,19 @@ function captureInitialImages(kind: CaptureKind): string[] {
   return one ? [one] : []
 }
 
-// ---- 预约 — 按键：任意时刻红灯落杆 step2；仅空闲弹窗 ----
+// ---- 预约 — 空闲按键红灯落杆 step2；检测中只提示 ----
 /** @param recordPress 操作台点「预约」需走 btn-press；现场键已记过则 false */
 let bookingPressInFlight = false
 async function openBookingDialog(opts?: { recordPress?: boolean }) {
   const detecting =
     bookingStore.isDetection || bookingStore.checkStep > 0 || workflow.value.checkStep > 0
 
-  if (opts?.recordPress) {
+  if (detecting) {
+    alert('当前处于检测流程中，请提交或重置后再预约')
+    return
+  }
+
+  if (opts?.recordPress && sharedSession.snapshot?.phase !== 'booking') {
     if (bookingPressInFlight) return
     bookingPressInFlight = true
     try {
@@ -1649,10 +1675,6 @@ async function openBookingDialog(opts?: { recordPress?: boolean }) {
     }
   }
 
-  if (detecting) {
-    bookingStore.setBtnPrebookPending(true)
-    return
-  }
   bookingStore.openDialog()
   workflow.value.bookingActive = bookingStore.bookingActive
 }
@@ -1679,10 +1701,14 @@ function onBookingReject() {
   bookingStore.setBtnPrebookPending(false)
 }
 
-/** WS 来车/按键预约 → 空闲才弹窗；检测中只闪烁 */
+/** WS 来车/按键预约 → 空闲才弹窗；检测中只提示 */
 function handleBookingComing(msg: { data?: unknown }) {
   const data = (msg.data ?? {}) as BookingComingPayload
   const action = data.action
+  if (action === 'busy') {
+    alert('当前处于检测流程中，请提交或重置后再预约')
+    return
+  }
   if (action === 'book_button') {
     bookingStore.setBtnPrebookPending(true)
     if (data.openDialog === false) return
@@ -1786,8 +1812,11 @@ async function onResetConfirmYes() {
     console.info('[booking] reset 响应:', r.code, r.message)
   } catch (e) {
     console.warn('[booking] reset 失败:', e)
+    alert('重置失败，当前检测内容已保留')
+    return
   }
-  doReset()
+  if (appConfig.useMock) doReset()
+  else await sharedSession.restore()
 }
 
 function onResetConfirmNo() {
@@ -1795,6 +1824,13 @@ function onResetConfirmNo() {
 }
 
 function doReset() {
+  captureDialog.value = null
+  showLicenseDialog.value = false
+  showPasscodeScan.value = false
+  showCarSize.value = false
+  showSubmitPreview.value = false
+  submitPreview.value = null
+  submissionDraft.value = {}
   form.value = {
     plate: '--',
     plateColor: '',
@@ -1831,6 +1867,8 @@ function doReset() {
   bodyProjectionMeta.value = { top: { source: '', metersPerPixel: .01 }, side: { source: '', metersPerPixel: .01 } }
   bodyProjectionError.value = ''
   bodyCloudGeometry.value = null
+  radarCloudImageUrl.value = ''
+  sharedGeometryUrl = ''
   bodyRadarCapture.value = null
   bodyRadarRefreshQueued = false
   laneOccupied.value = false
@@ -1937,9 +1975,8 @@ function buildSubmitPreview(): InspectionDetail {
     tail_image_path: toApiUrl(captureThumbs.value.tail || '') || undefined,
     top_image_path: toApiUrl(resolveTopImageRef()) || undefined,
     body_image_path: toApiUrl(bodyImageUrls.value.body || '') || undefined,
-    radar_side_image_path: '',
-    radar_top_image_path: '',
-    radar_head_image_path: toApiUrl(bookingStore.radarHeadImageUrl || '') || undefined,
+    appointment_radar_image_path: toApiUrl(bookingStore.radarHeadImageUrl || '') || undefined,
+    radar_3d_image_path: toApiUrl(radarCloudImageUrl.value) || undefined,
     transparent_image_path:
       toApiUrl(xrayDisplayUrl.value || xrayImageUrls.value['200'] || '') || undefined,
     goods_image_path: goodsJoined || undefined,
@@ -1980,6 +2017,8 @@ function buildSubmitPreview(): InspectionDetail {
 }
 
 async function onConfirm() {
+  try { await sharedSession.flush() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
+  updateRadarCloudScreenshot()
   /** 对齐 LvTongPro::onConfirmClicked：先弹查验记录预览，再写库 */
   if (aiSilentBusy.value) {
     alert(aiSilentBusyHint.value || 'AI 处理中，请稍候再确认')
@@ -2021,6 +2060,8 @@ async function onSubmitConfirmYes(payload?: {
   history_record?: string
 }) {
   submitRemark.value = payload?.history_record ?? submitRemark.value
+  updateRadarCloudScreenshot()
+  try { await sharedSession.flush() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
   showSubmitPreview.value = false
   submitPreview.value = null
 
@@ -2050,7 +2091,7 @@ async function onSubmitConfirmYes(payload?: {
   }
   const [licStitched, licMain, licHang] = await Promise.all([
     materializeForSubmit(licensePaths.value.licenseStitched || ''),
-    materializeForSubmit(licensePaths.value.license || ''),
+    materializeForSubmit(licensePaths.value.license || (!licensePaths.value.licenseStitched && !licensePaths.value.licenseGc ? captureThumbs.value.license || '' : '')),
     materializeForSubmit(licensePaths.value.licenseGc || ''),
   ])
 
@@ -2077,10 +2118,9 @@ async function onSubmitConfirmYes(payload?: {
     body_image_path: toStoragePath(bodyImageUrls.value.body || ''),
     // 车顶：图像采集区域（与预览一致），不用车身影像雷达测顶
     top_image_path: toStoragePath(resolveTopImageRef()),
-    // 车顶/车侧投影不再作为记录图片；3D点云与尺寸测量继续显示。
-    radar_side_image_path: '',
-    radar_top_image_path: '',
-    radar_head_image_path: toStoragePath(bookingStore.radarHeadImageUrl || ''),
+    appointment_radar_image_path: toStoragePath(bookingStore.radarHeadImageUrl || ''),
+    radar_3d_image_path: toStoragePath(radarCloudImageUrl.value),
+    inspection_session_id: getInspectionSessionId() || undefined,
     transparent_image_path: toStoragePath(xrayImageUrls.value['200'] || ''),
     // 通行码 QR 图（对齐 Qt m_codeImagePath，flask 后端生成）
     passcode_image_path: toStoragePath(captureThumbs.value.passcode || ''),
@@ -2148,7 +2188,8 @@ async function onSubmitConfirmYes(payload?: {
       } catch (e) {
         console.warn('[booking] reset 失败:', e)
       }
-      doReset()
+      if (appConfig.useMock) doReset()
+      else await sharedSession.restore()
     } else {
       alert(res.message || '提交失败')
     }
@@ -2174,10 +2215,118 @@ const stopErrorMessage = ref('')
 const showSubmitPreview = ref(false)
 const submitPreview = ref<InspectionDetail | null>(null)
 const submitRemark = ref('')
+const submissionDraft = ref<Record<string, unknown>>({})
 const showResetConfirmBox = ref(false)
+
+
+function readSharedDraft(): Draft {
+  return {
+    form: form.value, captureThumbs: captureThumbs.value, captureLists: captureLists.value,
+    licensePaths: licensePaths.value, passcode: passcode.value, submitRemark: submitRemark.value,
+    previousSelection: previousSelection.value, radarHeadImageUrl: bookingStore.radarHeadImageUrl,
+    radarCloudImageUrl: radarCloudImageUrl.value,
+    cropGoodsImages: [...cropGoodsImages], evidenceSourceKeys: [...evidenceSourceKeys],
+    bookingDraft: bookingStore.sharedDialogDraft,
+    submissionDraft: submissionDraft.value,
+    panelImages: { body: { '1': bodyImageUrls.value.body }, transparent: { '1': xrayImageUrls.value['200'], '2': xrayImageUrls.value['160'], '3': xrayImageUrls.value.mosaic } },
+  }
+}
+async function loadSharedGeometry(snapshot: SessionSnapshot, force = false) {
+  const url = snapshot.geometryUrl
+  if (!url || (!force && sharedGeometryUrl === url)) return
+  sharedGeometryUrl = url
+  const sid = snapshot.sessionId, generation = bodyProjectionGeneration
+  bodyRadarFetching.value = { top: true, side: true }
+  try {
+    const response = await fetch(toApiUrl(url))
+    if (!response.ok) throw new Error('点云缓存读取失败')
+    const data = await response.json()
+    if (getInspectionSessionId() !== sid || sharedGeometryUrl !== url || generation !== bodyProjectionGeneration) return
+    if (!data.geometry) throw new Error('共享点云数据无效')
+    bodyCloudGeometry.value = data.geometry
+    bodyProjectionError.value = ''
+  } catch (e) {
+    if (getInspectionSessionId() === sid && sharedGeometryUrl === url && generation === bodyProjectionGeneration) {
+      sharedGeometryUrl = '' // 下次快照或手动刷新允许重试。
+      bodyProjectionError.value = e instanceof Error ? e.message : '点云恢复失败'
+    }
+  } finally {
+    if (getInspectionSessionId() === sid && generation === bodyProjectionGeneration) bodyRadarFetching.value = { top: false, side: false }
+  }
+}
+const sharedSession = new InspectionSessionSync({
+  read: readSharedDraft,
+  load: async () => (await request<SessionSnapshot>('/inspection-session/current')).data,
+  save: async (snapshot, changes) => (await request<SessionSnapshot>('/inspection-session/current', {
+    method: 'PATCH', body: JSON.stringify({ sessionId: snapshot.sessionId, revision: snapshot.revision,
+      changes: await materializeDraftImages(changes) }), timeout: 60000,
+  })).data,
+  status: (message, error) => { syncMessage.value = message; syncError.value = error },
+  apply: (snapshot, draft, changedSession) => {
+    applyingSharedDraft = !syncReady.value || changedSession || snapshot.activeClientId !== getInspectionClientId()
+    if (changedSession || snapshot.phase === 'submitted') doReset()
+    setInspectionSessionId(snapshot.sessionId)
+    if (snapshot.phase === 'submitted') {
+      syncReady.value = true
+      void nextTick(() => { applyingSharedDraft = false })
+      return
+    }
+    bookingStore.sharedPhase = snapshot.phase
+    if (Object.keys(snapshot.booking).length) bookingStore.syncFromServer(snapshot.booking as unknown as Parameters<typeof bookingStore.syncFromServer>[0])
+    if (snapshot.phase === 'detecting') bookingStore.closeDialog()
+    if (draft.form) form.value = { ...form.value, ...(draft.form as typeof form.value) }
+    if (draft.captureThumbs) captureThumbs.value = { ...(draft.captureThumbs as typeof captureThumbs.value) }
+    if (draft.captureLists) captureLists.value = { ...captureLists.value, ...(draft.captureLists as typeof captureLists.value) }
+    if (draft.licensePaths) licensePaths.value = { ...licensePaths.value, ...(draft.licensePaths as typeof licensePaths.value) }
+    if ('passcode' in draft) passcode.value = draft.passcode as typeof passcode.value
+    if ('submitRemark' in draft) submitRemark.value = String(draft.submitRemark || '')
+    if ('previousSelection' in draft) previousSelection.value = draft.previousSelection as typeof previousSelection.value
+    if (draft.submissionDraft) submissionDraft.value = draft.submissionDraft as Record<string, unknown>
+    if (draft.bookingDraft) bookingStore.sharedDialogDraft = draft.bookingDraft as Record<string, unknown>
+    if (snapshot.phase === 'booking' && !bookingStore.dialogVisible) bookingStore.openDialog()
+    if ('radarHeadImageUrl' in draft) bookingStore.radarHeadImageUrl = String(draft.radarHeadImageUrl || '')
+    if ('radarCloudImageUrl' in draft) radarCloudImageUrl.value = String(draft.radarCloudImageUrl || '')
+    if (Array.isArray(draft.cropGoodsImages)) { cropGoodsImages.clear(); draft.cropGoodsImages.forEach(v => cropGoodsImages.add(String(v))) }
+    if (Array.isArray(draft.evidenceSourceKeys)) { evidenceSourceKeys.clear(); draft.evidenceSourceKeys.forEach(v => evidenceSourceKeys.add(String(v))) }
+    const state = snapshot.workflow
+    gateReleased.value = !!state.gateReleased
+    laneOccupied.value = !!state.laneOccupied
+    workflow.value.checkStep = state.step ?? bookingStore.checkStep
+    workflow.value.stepMessage = state.message || ''
+    workflow.value.bookingActive = bookingStore.isDetection
+    if (snapshot.geometryCapture) bodyRadarCapture.value = snapshot.geometryCapture as BodyRadarCaptureStatus
+    const timeMap = { btnPrebookTime: 'btn_prebook_time', acceptanceTime: 'acceptance_time', opengateTime: 'opengate_time', openlightscreenTime: 'openlightscreen_time', closelightscreenTime: 'closelightscreen_time', cdPhotoTime: 'cd_photo_time' } as const
+    for (const [key, field] of Object.entries(timeMap)) {
+      workflow.value[key as keyof typeof timeMap] = String(snapshot.booking[field] || '')
+    }
+    const images = (draft.panelImages || snapshot.images) as SessionSnapshot['images']
+    if (images?.body) bodyImageUrls.value = { ...bodyImageUrls.value, body: images.body['1'] || '' }
+    if (images?.transparent) xrayImageUrls.value = {
+      '200': images.transparent['1'] || '', '160': images.transparent['2'] || '', mosaic: images.transparent['3'] || '',
+    }
+    void loadSharedGeometry(snapshot)
+    syncReady.value = true
+    void nextTick(() => { applyingSharedDraft = false })
+  },
+})
+watch(readSharedDraft, () => sharedSession.changed(), { deep: true, flush: 'sync' })
+function updateRadarCloudScreenshot() {
+  if (!bodyCloudPanelRef.value?.ready) return
+  try { radarCloudImageUrl.value = bodyCloudPanelRef.value.getPreviewImage() }
+  catch (e) { bodyProjectionError.value = e instanceof Error ? e.message : '3D雷达图生成失败' }
+}
+watch([bodyCloudGeometry, () => bodyCloudPanelRef.value?.ready], ([geometry, ready]) => {
+  if (geometry && ready && !radarCloudImageUrl.value) void nextTick(updateRadarCloudScreenshot)
+})
+async function retrySessionSync() {
+  try { await sharedSession.restore(); await sharedSession.flush() } catch { /* 显示同步错误，保留本机待上传内容 */ }
+}
 
 // ---- WebSocket 实时数据 ----
 function setupWS() {
+  const unSession = wsStore.subscribe('inspection_session', msg => sharedSession.receive(msg.data as SessionSnapshot))
+  const unRestore = watch(() => wsStore.isConnected, connected => { if (connected && !appConfig.useMock) void sharedSession.restore().catch(() => {}) })
+  onUnmounted(() => { unSession(); unRestore(); sharedSession.dispose() })
   wsStore.connect()
 
   // 晚进页时回放 WS 已缓存的 DEVICE，避免信号灯/光机图标全灰
@@ -2258,6 +2407,7 @@ function setupWS() {
   })
 
   wsStore.subscribe('detection_step', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     const data = msg.data as {
       step?: number
       message?: string
@@ -2278,6 +2428,7 @@ function setupWS() {
   })
 
   wsStore.subscribe('lane_occupied', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     const data = msg.data as { occupied?: boolean } | undefined
     if (data?.occupied != null) {
       laneOccupied.value = Boolean(data.occupied)
@@ -2289,6 +2440,7 @@ function setupWS() {
   wsStore.subscribe('booking', handleBookingComing)
 
   wsStore.subscribe('booking_accepted', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     // 新一轮不得保留上一辆车的点云或在途缓存响应。
     bodyProjectionGeneration++
     bodyRadarFetching.value = { top: false, side: false }
@@ -2337,6 +2489,7 @@ function setupWS() {
   })
 
   wsStore.subscribe('booking_rejected', () => {
+    if (syncReady.value && !appConfig.useMock) return
     bookingStore.applyReject()
     workflow.value.bookingActive = false
     laneOccupied.value = false
@@ -2346,6 +2499,7 @@ function setupWS() {
 
   /** 对齐 LvTongPro::onReset：服务端推送 booking_reset 时兜底重置 */
   wsStore.subscribe('booking_reset', () => {
+    if (syncReady.value && !appConfig.useMock) return
     doReset()
   })
 
@@ -2355,6 +2509,7 @@ function setupWS() {
   }
 
   const unsubscribeBodyRadar = wsStore.subscribe('body_radar', (msg) => {
+    if (!appConfig.useMock) return // 生产点云及采集状态统一从持久会话恢复。
     const capture = msg.data as BodyRadarCaptureStatus | undefined
     if (!capture) return
     if (bodyRadarCapture.value?.generation !== capture.generation || capture.state === 'stopped') {
@@ -2373,7 +2528,7 @@ function setupWS() {
   })
   // 页面刷新或断线重连后恢复缓存；即使停留在车身图也持续接收本轮点云。
   const unsubscribeBodyRadarConnection = watch(() => wsStore.isConnected, (connected) => {
-    if (connected) void ensureBodyRadarImage(true)
+    if (connected && appConfig.useMock) void ensureBodyRadarImage(true)
   }, { immediate: true })
   onUnmounted(() => { unsubscribeBodyRadar(); unsubscribeBodyRadarConnection() })
 
@@ -2382,6 +2537,7 @@ function setupWS() {
    *  2) flask capture_service：{ imageType: head|tail|top|..., url }
    */
   wsStore.subscribe('image_ready', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     const data = msg.data as
       | {
           imageType?: string
@@ -2467,6 +2623,7 @@ function setupWS() {
 
   /** 移动 app 上传 — 对齐 LvTongPro.cpp:1680-1948 JsonFolderWatcher 回调 */
   wsStore.subscribe('mobile_upload', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     const data = msg.data as
       | {
           sessionId?: string
@@ -2551,6 +2708,7 @@ function setupWS() {
 
   /** 通行码 14 字段解析 — 对齐 Qt PassCodeUtil::GetPassCodeInfoByCodeStr */
   wsStore.subscribe('mobile_passcode', (msg) => {
+    if (syncReady.value && !appConfig.useMock) return
     const pc = msg.data as typeof passcode.value
     if (!pc || !pc.valid) return
     applyPasscode(pc)
@@ -2669,6 +2827,7 @@ function onStopResetClose() {
 onMounted(async () => {
   loadDicts()
   setupWS()
+  if (!appConfig.useMock) void sharedSession.restore().catch(() => {})
   document.addEventListener('click', onXrayDocClick)
   await nextTick()
   startLiveVideo()
@@ -2719,6 +2878,10 @@ const anyDialogOpen = computed(
 
 <template>
   <div class="dashboard">
+    <div v-if="!appConfig.useMock" class="session-sync-status" :class="{ 'sync-error': syncError }" role="status">
+      {{ syncMessage }}<button v-if="syncError" type="button" @click="retrySessionSync">重试同步</button>
+    </div>
+    <div v-if="!syncReady" class="session-restore-mask"><span>{{ syncMessage }}</span><button type="button" @click="retrySessionSync">重新加载</button></div>
     <AppHeader
       :username="auth.user?.realName"
       :ai-online="aiOnline"
@@ -2748,15 +2911,16 @@ const anyDialogOpen = computed(
             </button>
             <button type="button" class="body-capture-btn" :disabled="!bodyCanCapture" title="全屏预览车身影像" @click="openImagePreview('body')">预览</button>
           </div>
+          <div v-if="bodyCloudGeometry" class="body-cloud-host" :class="{ 'cloud-offscreen': bodyView === 'body' }">
           <BodyCloud3DPanel
-            v-if="bodyView !== 'body'"
             ref="bodyCloudPanelRef"
             :geometry="bodyCloudGeometry"
             :loading="bodyRadarFetching.top || bodyRadarFetching.side"
             :error="bodyProjectionError || bodyRadarStatusText"
           />
+          </div>
           <BodyPointCloudPanel
-            v-else
+            v-if="bodyView === 'body'"
             ref="bodyPcPanelRef"
             :placeholder="bodyPlaceholderText"
             :placeholder-tone="bodyPlaceholderTone"
@@ -3262,6 +3426,9 @@ const anyDialogOpen = computed(
       v-if="showSubmitPreview && submitPreview"
       mode="submit"
       :preview="submitPreview"
+      @remark-change="submitRemark = $event"
+      :decision-draft="submissionDraft"
+      @decision-change="submissionDraft = $event"
       @confirm="onSubmitConfirmYes"
       @close="onSubmitConfirmNo"
     />
@@ -3932,4 +4099,12 @@ const anyDialogOpen = computed(
     background: #6b7280;
   }
 }
+</style>
+
+<style scoped>
+.session-sync-status { position: fixed; bottom: 3px; right: 8px; z-index: 3000; font-size: 12px; color: #47786a; background: #f0faf5; border-radius: 3px; padding: 2px 6px; }
+.session-sync-status.sync-error { color: #b72b27; background: #fff1ed; }
+.session-restore-mask { position: fixed; inset: 0; z-index: 5000; background: #ffffffed; display: flex; align-items: center; justify-content: center; gap: 16px; }
+.body-cloud-host { display: flex; flex: 1; min-height: 0; }
+.body-cloud-host.cloud-offscreen { position: fixed; left: -10000px; top: 0; width: 900px; height: 420px; pointer-events: none; }
 </style>

@@ -5,7 +5,7 @@
  * - history：历史记录「查看详情 / 双击」打开，可修改
  * - submit：Dashboard 提交前预览；业务字段只读，查验结果/不合格类型可改
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AgriculturalSelect from '@/components/AgriculturalSelect.vue'
 import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
@@ -49,6 +49,7 @@ const props = withDefaults(
     inspectionId?: number
     /** submit 模式：当前录入快照，不请求详情 API */
     preview?: InspectionDetail | null
+    decisionDraft?: Record<string, unknown>
   }>(),
   {
     mode: 'history',
@@ -59,6 +60,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   close: []
   modified: []
+  remarkChange: [value: string]
+  decisionChange: [value: Record<string, unknown>]
   /** submit 模式：用户点确认，把预览里的查验结果/复审人带回 Dashboard */
   confirm: [
     payload?: {
@@ -103,11 +106,31 @@ const vehicleSizeDisplay = ref('')
 const loadRate = ref('')
 const driverPhone = ref('')
 const remark = ref('')
+watch(remark, value => { if (isSubmitMode.value) emit('remarkChange', value) })
 const inspectorPhone = ref('')
 const reviewerPhone = ref('')
 const groupId = ref(0)
 const resultStatus = ref(0)
 const noPassType = ref(0)
+let restoringDecision = false
+function restoreDecision() {
+  if (!isSubmitMode.value || !props.decisionDraft) return
+  restoringDecision = true
+  const d = props.decisionDraft
+  if (typeof d.inspector_phone === 'string') inspectorPhone.value = d.inspector_phone
+  if (typeof d.reviewer_phone === 'string') reviewerPhone.value = d.reviewer_phone
+  if (typeof d.group_id === 'number') groupId.value = d.group_id
+  if (typeof d.result_status === 'number') resultStatus.value = d.result_status
+  if (typeof d.no_pass_type === 'number') noPassType.value = d.no_pass_type
+  void nextTick(() => { restoringDecision = false })
+}
+watch(() => props.decisionDraft, restoreDecision, { deep: true })
+watch([inspectorPhone, reviewerPhone, groupId, resultStatus, noPassType], () => {
+  if (isSubmitMode.value && !restoringDecision && !loading.value) emit('decisionChange', {
+    inspector_phone: inspectorPhone.value, reviewer_phone: reviewerPhone.value, group_id: groupId.value,
+    result_status: resultStatus.value, no_pass_type: noPassType.value,
+  })
+})
 
 const showCarSize = ref(false)
 const carLen = ref('')
@@ -248,9 +271,8 @@ const galleryItems = computed((): GalleryItem[] => {
   splitImagePaths(r.evidences_image_path).forEach((p, i) => push(`证据照${i + 1}`, p))
   push('透视图像', r.transparent_image_path)
   push('车身图像', r.body_image_path)
-  push('车侧雷达图', r.radar_side_image_path)
-  push('车顶雷达图', r.radar_top_image_path)
-  push('车头雷达图', r.radar_head_image_path)
+  push('预约雷达图', r.appointment_radar_image_path)
+  push('3D雷达图', r.radar_3d_image_path)
   splitImagePaths(r.goods_image_path).forEach((p, i) => push(`货物照片${i + 1}`, p))
   push('通行码', r.pass_code_image_path)
   return items
@@ -319,6 +341,7 @@ function applyRecord(data: InspectionDetail) {
   // 0=合格，1=不合格
   resultStatus.value = Number(data.result_status) === 1 ? 1 : 0
   noPassType.value = data.no_pass_type ?? 0
+  restoreDecision()
 }
 
 async function loadDetail() {
@@ -536,7 +559,7 @@ function validateSubmitConfirm(): string | null {
   }
 
   // 图片：
-  // 可空 — 车顶、透视、证据、雷达侧/顶/头
+  // 可空 — 车顶、透视、证据、预约雷达图/3D雷达图
   // 单张必有 — 车头、车尾、车身、行驶证、通行码（通行码已在上面校验）
   // 多张至少一张 — 货物
   need('车头', hasRealImage(r.head_image_path))

@@ -1,7 +1,7 @@
 /**
  * 预约弹窗控制器 — 对齐 OrderDialog 槽函数与局部状态
  */
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { DEFAULT_HEAD_WIDTH, getBookingApi } from '../api/bookingApi'
 import { useBookingStore } from '../store/useBookingStore'
 import type { BookingAcceptPayload, BookingConfirmConfig, VehicleSizeType } from '../types'
@@ -57,6 +57,42 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
   /** 弹窗车型：默认同步车高；用户点图标后以手动为准 */
   const vehicleType = ref<VehicleSizeType>('big')
   const vehicleTypeManual = ref(false)
+  let restoringDraft = false
+  let dialogInitialized = false
+  function restoreDialogDraft() {
+    const d = bookingStore.sharedDialogDraft
+    if (!d || !Object.keys(d).length) return false
+    restoringDraft = true
+    if (typeof d.linePosition === 'number') linePosition.value = d.linePosition
+    if (typeof d.carHeadLength === 'number') carHeadLength.value = d.carHeadLength
+    if (typeof d.vehicleHeight === 'number') vehicleHeight.value = d.vehicleHeight
+    if (d.vehicleType === 'small' || d.vehicleType === 'big') vehicleType.value = d.vehicleType
+    if (typeof d.xrayEnabled === 'boolean') xrayEnabled.value = d.xrayEnabled
+    if (typeof d.radarImageUrl === 'string') radarImageUrl.value = d.radarImageUrl || null
+    if (typeof d.imageEnvelope === 'string') imageEnvelope.value = d.imageEnvelope
+    if (typeof d.vehicleHeaderEnvelope === 'string') vehicleHeaderEnvelope.value = d.vehicleHeaderEnvelope
+    if (typeof d.originalImageWidth === 'number') originalImageWidth.value = d.originalImageWidth
+    if (typeof d.metersPerPixel === 'number') metersPerPixel.value = d.metersPerPixel
+    if (typeof d.vehicleSx === 'number' || d.vehicleSx === null) vehicleSx.value = d.vehicleSx as number | null
+    if (typeof d.contentOriginX === 'number' || d.contentOriginX === null) contentOriginX.value = d.contentOriginX ?? undefined
+    lineAdjusted = typeof d.lineAdjusted === 'boolean' ? d.lineAdjusted : true
+    vehicleTypeManual.value = typeof d.vehicleTypeManual === 'boolean' ? d.vehicleTypeManual : true
+    restoringDraft = false
+    return true
+  }
+  watch(() => bookingStore.sharedDialogDraft, () => { if (dialogInitialized && !restoringDraft) restoreDialogDraft() }, { deep: true, flush: 'sync' })
+  watch(() => ({ linePosition: linePosition.value, carHeadLength: carHeadLength.value,
+    vehicleHeight: vehicleHeight.value, vehicleType: vehicleType.value, xrayEnabled: xrayEnabled.value,
+    radarImageUrl: radarImageUrl.value || '', imageEnvelope: imageEnvelope.value,
+    vehicleHeaderEnvelope: vehicleHeaderEnvelope.value, originalImageWidth: originalImageWidth.value,
+    metersPerPixel: metersPerPixel.value, vehicleSx: vehicleSx.value, contentOriginX: contentOriginX.value ?? null,
+    lineAdjusted, vehicleTypeManual: vehicleTypeManual.value }), (draft) => {
+    if (dialogInitialized && !restoringDraft) {
+      restoringDraft = true
+      bookingStore.sharedDialogDraft = draft
+      restoringDraft = false
+    }
+  }, { deep: true, flush: 'sync' })
 
   function syncVehicleTypeFromHeight(height: number) {
     if (vehicleTypeManual.value) return
@@ -250,6 +286,10 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
    */
   async function initDialog(opts?: { fetchRadar?: boolean }) {
     const session = ++sessionGeneration
+    if (restoreDialogDraft()) {
+      dialogInitialized = true
+      return
+    }
     requestGeneration++
     xrayEnabled.value = true
     radarImageUrl.value = null
@@ -269,11 +309,16 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
     originalImageWidth.value = 0
     errorMessage.value = ''
 
+    dialogInitialized = true
+
     // 雷达图立刻拉，与 /open 的组播提交并行
     const radarPromise =
       opts?.fetchRadar === false
         ? Promise.resolve()
         : refreshRadarImage({ maxRetries: 2 })
+
+    // 另一终端只恢复正在打开的预约，不能重复派发open的业务命令。
+    if (bookingStore.sharedPhase === 'booking') { void radarPromise; return }
 
     try {
       const openResult = await api.openDialog()

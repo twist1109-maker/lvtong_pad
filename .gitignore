@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 tests/layout/artifacts/
+tests/session/artifacts/
 
 # Editor directories and files
 .vscode/*

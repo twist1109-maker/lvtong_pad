@@ -26,8 +26,11 @@ export const useBookingStore = defineStore('booking', () => {
   const bookingDialogShown = ref(false)
   /** SP 视频流预留 */
   const videoStreamUrl = ref<string | null>(null)
-  /** 预约车头雷达图（受理时带入，提交写 radar_head_image_path） */
+  /** 预约车头雷达图（受理时带入，提交写 appointment_radar_image_path） */
   const radarHeadImageUrl = ref('')
+  /** 预约中尚未受理的红线/车型等草稿，跨设备恢复时不会调用open接口。 */
+  const sharedDialogDraft = ref<Record<string, unknown>>({})
+  const sharedPhase = ref('idle')
 
   // ---- 时间字段（对齐 Qt m_VehicleInspection.* 命名，权威源 = 后端 _booking_state） ----
   /** 司机按键预约时间（来自后端栈） */
@@ -89,6 +92,7 @@ export const useBookingStore = defineStore('booking', () => {
     btnPrebookPending.value = false
     dialogVisible.value = false
     radarHeadImageUrl.value = ''
+    sharedDialogDraft.value = {}
   }
 
   function setVideoStreamUrl(url: string | null) {
@@ -132,6 +136,8 @@ export const useBookingStore = defineStore('booking', () => {
   }
 
   function reset() {
+    sharedPhase.value = 'idle'
+    sharedDialogDraft.value = {}
     dialogVisible.value = false
     isDetection.value = false
     checkStep.value = 0
@@ -161,6 +167,8 @@ export const useBookingStore = defineStore('booking', () => {
     bookingDialogShown,
     videoStreamUrl,
     radarHeadImageUrl,
+    sharedDialogDraft,
+    sharedPhase,
     btnPrebookTime,
     acceptanceTime,
     opengateTime,

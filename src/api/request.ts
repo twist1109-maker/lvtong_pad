@@ -1,4 +1,11 @@
 import { appConfig } from '@/config/env'
+import { getInspectionSessionId, getInspectionClientId } from '@/services/inspectionSessionContext'
+
+export class ApiError extends Error {
+  status: number
+  data: unknown
+  constructor(message: string, status: number, data: unknown = null) { super(message); this.status = status; this.data = data }
+}
 
 export interface RequestOptions extends RequestInit {
   /** 请求超时时间（毫秒），默认 30000 */
@@ -34,6 +41,9 @@ export async function request<T>(
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
+  const inspectionSession = getInspectionSessionId()
+  if (inspectionSession) headers['X-Inspection-Session'] = inspectionSession
+  headers['X-Inspection-Client'] = getInspectionClientId()
 
   // 超时控制：使用 AbortController 防止请求无限等待
   const controller = new AbortController()
@@ -68,11 +78,13 @@ export async function request<T>(
   if (!res.ok) {
     // 尝试读取后端返回的错误信息
     let message = `请求失败: ${res.status}`
+    let data: unknown = null
     try {
       const body: ApiResponse = await res.json()
       if (body.message) message = body.message
+      data = body.data
     } catch { /* 无法解析 body 时使用默认 message */ }
-    throw new Error(message)
+    throw new ApiError(message, res.status, data)
   }
 
   return res.json() as Promise<ApiResponse<T>>

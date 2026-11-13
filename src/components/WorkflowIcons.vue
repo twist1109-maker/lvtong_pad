@@ -97,7 +97,7 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
         :style="{ width: cellWidthPct }"
         :title="
           item.key === 'book' && bookingActive
-            ? '检测进行中，点击记录待处理预约'
+            ? '检测进行中，请提交或重置后再预约'
             : item.title || item.label
         "
         @click="emit('click', item.key)"

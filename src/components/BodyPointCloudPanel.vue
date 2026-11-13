@@ -569,7 +569,6 @@ defineExpose({
           <div v-if="draftStyle" class="box-rect is-draft" :style="draftStyle" />
         </div>
       </div>
-      <span v-if="captureMode" class="capture-hint">拖动框选截图，松开后放入右侧实时视频</span>
     </div>
   </div>
 </template>

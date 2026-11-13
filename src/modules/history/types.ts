@@ -54,12 +54,10 @@ export interface InspectionDetail {
   evidences_image_path?: string
   license_image_path?: string
   pass_code_image_path?: string
-  /** 车侧雷达图（车身影像） */
-  radar_side_image_path?: string
-  /** 车顶雷达图（车身影像） */
-  radar_top_image_path?: string
-  /** 车头雷达图（预约界面） */
-  radar_head_image_path?: string
+  /** 预约界面雷达图片 */
+  appointment_radar_image_path?: string
+  /** 点云3D视图截图 */
+  radar_3d_image_path?: string
   operator_name?: string
   inspector_phone?: string
   reviewer_name?: string
