@@ -18,7 +18,7 @@ export function useDeviceCamera(videoRef: Ref<HTMLVideoElement | null>) {
     status.value = 'idle'
   }
 
-  async function start(): Promise<boolean> {
+  async function start(facingMode: 'user' | 'environment' = 'environment', exactFacing = false): Promise<boolean> {
     stop()
     const request = generation
     status.value = 'opening'
@@ -33,7 +33,7 @@ export function useDeviceCamera(videoRef: Ref<HTMLVideoElement | null>) {
       const acquired = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: exactFacing ? { exact: facingMode } : { ideal: facingMode },
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },

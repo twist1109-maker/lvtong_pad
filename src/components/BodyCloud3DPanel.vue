@@ -3,11 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { decodeCloudGeometry, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
-import FrameCropSelection from '@/components/FrameCropSelection.vue'
 
-const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string; captureMode?: boolean }>()
-const emit = defineEmits<{ screenshot: [image: string]; captureError: [message: string]; cancelCapture: [] }>()
-const captureImage = ref('')
+const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string }>()
 const host = ref<HTMLDivElement | null>(null)
 const renderError = ref('')
 const ready = ref(false)
@@ -64,7 +61,6 @@ function fitToBounds() {
 }
 function resize() {
   if (!renderer || !host.value) return
-  if (captureImage.value && (width !== host.value.clientWidth || height !== host.value.clientHeight)) emit('cancelCapture')
   width = Math.max(1, host.value.clientWidth)
   height = Math.max(1, host.value.clientHeight)
   renderer.setSize(width, height, false)
@@ -157,7 +153,6 @@ function rebuild() {
 function onContextLost(event: Event) {
   event.preventDefault(); contextLost = true; ready.value = false
   renderError.value = '三维显示已中断，请刷新页面重试'
-  emit('cancelCapture')
 }
 function getPreviewImage() {
   if (!renderer || !ready.value || contextLost) throw new Error('三维画面尚未加载，无法预览')
@@ -177,13 +172,6 @@ function getPreviewImage() {
     ctx.fillText(label.text, label.x / 100 * canvas.width, label.y / 100 * canvas.height)
   }
   return canvas.toDataURL('image/png')
-}
-function startCapture() {
-  if (!renderer || !ready.value || contextLost) { emit('cancelCapture'); return }
-  try {
-    captureImage.value = getPreviewImage()
-    controls.enabled = false
-  } catch { emit('captureError', '三维截图失败，请刷新视图后重试') }
 }
 onMounted(() => {
   try {
@@ -207,11 +195,6 @@ onMounted(() => {
 watch(() => props.geometry, rebuild)
 watch(ranges, updateBox, { deep: true })
 watch(boundsVisible, () => { if (boxGroup) boxGroup.visible = boundsVisible.value; render() })
-watch(() => props.captureMode, active => {
-  if (active) startCapture()
-  else { captureImage.value = ''; if (controls) controls.enabled = true }
-})
-watch(() => props.geometry, () => { captureImage.value = ''; emit('cancelCapture') })
 defineExpose({ ready, getPreviewImage })
 onBeforeUnmount(() => {
   observer?.disconnect()
@@ -246,7 +229,6 @@ onBeforeUnmount(() => {
       </div>
       <small>数值按当前点云范围测量</small>
     </div>
-    <FrameCropSelection v-if="captureMode && captureImage" :image="captureImage" @crop="emit('screenshot', $event)" @cancel="emit('cancelCapture')" @error="emit('captureError', $event)" />
   </div>
 </template>
 

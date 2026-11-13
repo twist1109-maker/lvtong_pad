@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 图像采集弹窗 — 1:1 对齐 Qt GetPic/Tail/Top/Goods/Evidence (1400×713)
- * - 车头/车尾/车顶默认打开对应网络相机，货物默认球机；可手动切换平板相机。
+ * - 车头/车尾/车顶默认打开对应网络相机，货物默认球机；可手动切换本地相机。
  * - 车头/车尾/车顶：WebRTC cam2/cam1/cam6；预约相机：WebRTC cam4
  * - 球机：WebRTC cam5；云台由 Flask 后端通过海康 ISAPI 控制
  * - 货物/证据才有「图片数量」+「选中删除」（GetGoods/Evidence）；车头/尾/顶无
@@ -13,7 +13,7 @@ import {
 } from '@/config/hikvision'
 import { resolveCaptureWhepUrl } from '@/config/liveVideo'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
-import { useDeviceCamera } from '@/composables/useDeviceCamera'
+import LocalCameraFullscreen from './LocalCameraFullscreen.vue'
 import {
   controlPtzApi,
   controlPtzPresetApi,
@@ -41,7 +41,7 @@ const TITLE_MAP: Record<CaptureKind, string> = {
   evidence: '证据照',
 }
 
-const DEVICE_CAMERA = '平板相机'
+const DEVICE_CAMERA = '本地相机'
 const DEFAULT_CAMERA: Record<CaptureKind, string> = {
   head: '车头相机', tail: '车尾相机', top: '车顶相机', goods: '球机', evidence: DEVICE_CAMERA,
 }
@@ -72,8 +72,7 @@ const selectedIndex = ref(0)
 const capturing = ref(false)
 const closing = ref(false)
 const whepVideoRef = ref<HTMLVideoElement | null>(null)
-const deviceVideoRef = ref<HTMLVideoElement | null>(null)
-const deviceCamera = useDeviceCamera(deviceVideoRef)
+const localCameraOpen = ref(false)
 const captureError = ref('')
 
 const {
@@ -87,7 +86,7 @@ const liveHint = computed(() => {
   if (props.captureBlocked) return '车道占用，已暂停拍照'
   if (captureError.value) return captureError.value
   if (!useWhepPreview.value) {
-    return deviceCamera.error.value || (deviceCamera.status.value === 'opening' ? '正在打开摄像头…' : '对准目标后点击拍照')
+    return '点击打开全屏本地相机，可拍照或选择相册'
   }
   if (whepError.value) return whepError.value
   if (whepStatus.value === 'connecting') return '连接中…'
@@ -106,7 +105,7 @@ const showLiveHint = computed(() => {
 })
 const previewPlaying = computed(() => useWhepPreview.value
   ? whepStatus.value === 'playing'
-  : deviceCamera.status.value === 'ready')
+  : false)
 
 /** 球机预置位 1-9：本机记住「已设置」状态；真正坐标在摄像机内 */
 const PRESET_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
@@ -258,9 +257,9 @@ async function applyPreviewForCamera(name: string) {
   captureError.value = ''
   if (name === DEVICE_CAMERA) {
     await stopWhep()
-    if (!closing.value) await deviceCamera.start()
+    if (!closing.value) localCameraOpen.value = true
   } else {
-    deviceCamera.stop()
+    localCameraOpen.value = false
     await startWhepPreview(name)
   }
 }
@@ -277,7 +276,7 @@ onMounted(async () => {
 })
 
 function detachPreview() {
-  deviceCamera.stop()
+  localCameraOpen.value = false
   void stopWhep()
 }
 
@@ -291,6 +290,7 @@ onBeforeUnmount(() => {
 
 async function selectCamera(name: string) {
   if (isCameraDisabled(name) || switchingCamera.value || closing.value) return
+  if (name === DEVICE_CAMERA && name === activeCamera.value) { localCameraOpen.value = true; return }
   if (name === activeCamera.value && previewPlaying.value) return
 
   const prevName = activeCamera.value
@@ -445,17 +445,17 @@ function captureFromWhepVideo(): string {
 }
 
 async function onCaptureClick() {
-  if (props.captureBlocked || capturing.value || closing.value) return
+  if (capturing.value || closing.value) return
+  if (!useWhepPreview.value) { localCameraOpen.value = true; return }
+  if (props.captureBlocked) return
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
   captureError.value = ''
   try {
-    if (!useWhepPreview.value) {
-      pushPhoto(deviceCamera.captureJpeg())
-    } else if (whepStatus.value === 'playing') {
+    if (whepStatus.value === 'playing') {
       pushPhoto(captureFromWhepVideo())
     } else {
-      captureError.value = '相机画面未就绪，请等待连接或切换到平板相机'
+      captureError.value = '相机画面未就绪，请等待连接或切换到本地相机'
     }
   } catch (cause) {
     captureError.value = cause instanceof Error ? cause.message : '拍照失败，请重试'
@@ -570,14 +570,7 @@ function openPreview() {
 
           <div class="live-wrap">
             <div class="live-stage">
-              <video
-                v-show="!useWhepPreview"
-                ref="deviceVideoRef"
-                class="whep-live"
-                muted
-                autoplay
-                playsinline
-              />
+              <button v-if="!useWhepPreview" type="button" class="local-camera-launch" @click="localCameraOpen = true">打开全屏本地相机</button>
               <video
                 v-show="useWhepPreview"
                 ref="whepVideoRef"
@@ -592,15 +585,15 @@ function openPreview() {
               class="live-status"
               :class="{
                 err:
-                  !!captureError || (useWhepPreview ? whepStatus === 'error' || !!whepError : !!deviceCamera.error.value),
+                  !!captureError || (useWhepPreview && (whepStatus === 'error' || !!whepError)),
               }"
             >
               {{ liveHint }}
               <button
-                v-if="!useWhepPreview && deviceCamera.status.value === 'error'"
+                v-if="!useWhepPreview"
                 type="button"
                 @click="selectCamera(DEVICE_CAMERA)"
-              >重新打开摄像头</button>
+              >打开本地相机</button>
             </div>
           </div>
 
@@ -781,10 +774,10 @@ function openPreview() {
               <button
                 type="button"
                 class="btn-shot"
-                :disabled="captureBlocked || capturing || !previewPlaying || closing"
+                :disabled="(useWhepPreview && (captureBlocked || !previewPlaying)) || capturing || closing"
                 @click="onCaptureClick"
               >
-                {{ capturing ? '拍照中…' : '拍照' }}
+                {{ !useWhepPreview ? '打开本地相机' : capturing ? '拍照中…' : '拍照' }}
               </button>
               <button type="button" class="btn-ok" @click="onConfirm">确认选择</button>
             </div>
@@ -795,9 +788,17 @@ function openPreview() {
     </div>
   </div>
   </Teleport>
+  <LocalCameraFullscreen
+    v-if="localCameraOpen"
+    :capture-blocked="captureBlocked"
+    :remaining="isMulti ? Math.max(0, maxCount - photos.length) : 1"
+    @photo="pushPhoto"
+    @close="localCameraOpen = false"
+  />
 </template>
 
 <style scoped lang="scss">
+.local-camera-launch { margin: auto; padding: 18px; color: #326c5b; background: #e1f1e9; border: 1px solid #bdd9cf; border-radius: 8px; font: inherit; cursor: pointer; }
 .cap-overlay {
   position: fixed;
   inset: 0;

@@ -1,6 +1,7 @@
 import { defineConfig, mergeConfig } from 'vite'
 import base from '../../vite.config'
 const config = mergeConfig(base, defineConfig({
+  cacheDir: 'node_modules/.vite-body-capture',
   define: { 'import.meta.env.VITE_USE_MOCK': JSON.stringify('true') },
   server: { host: '127.0.0.1', port: 5193, strictPort: true },
 }))

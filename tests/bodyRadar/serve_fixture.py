@@ -9,6 +9,10 @@ from flask_socketio import SocketIO
 from app.services import temp_image_cache as cache
 from app.services.radar_point_cloud import decode_body_radar_data
 from app.services import geometry_capture as capture
+# 此隔离服务使用原生线程；生产 gevent 线程池不能在多个原生线程间共用 hub。
+from app.services import middleware_http, body_radar_projection
+middleware_http._run_in_pool = lambda task: task()
+body_radar_projection._run_in_pool = lambda task: task()
 import app.websocket.handler as handler
 import config
 import cv2,numpy as np
