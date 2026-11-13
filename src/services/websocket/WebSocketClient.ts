@@ -12,6 +12,7 @@ import type {
  */
 export class WebSocketClient {
   private socket: Socket | null = null
+  private authToken = ''
   private status: WsConnectionStatus = 'idle'
   private readonly handlers = new Map<string, Set<WsMessageHandler>>()
   private readonly options: WsClientOptions
@@ -29,7 +30,12 @@ export class WebSocketClient {
   }
 
   connect() {
-    if (this.socket?.connected) return
+    const token = localStorage.getItem('lvtong_token') || sessionStorage.getItem('lvtong_token') || ''
+    // 登录页会建立匿名连接；登录/切换账号后必须重新握手加入共享检测房间。
+    // 同一凭据的连接或重连中复用，避免App与Dashboard连续connect创建重复监听。
+    if (this.socket && this.authToken === token && (this.socket.connected || this.socket.active)) return
+    this.disconnect()
+    this.authToken = token
 
     this.setStatus('connecting')
 
@@ -74,9 +80,11 @@ export class WebSocketClient {
 
   disconnect() {
     if (this.socket) {
+      this.socket.removeAllListeners()
       this.socket.disconnect()
       this.socket = null
     }
+    this.authToken = ''
     this.setStatus('idle')
   }
 

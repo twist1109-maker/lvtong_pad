@@ -8,10 +8,13 @@ fs.mkdirSync(artifacts, { recursive: true });
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true, args: ['--enable-webgl', '--enable-unsafe-swiftshader'] });
   try {
-    const errors = [], bookingActions = [];
+    const errors = [], bookingActions = [], padConnections = [];
     const pcCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const padCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (Linux; Android 13; Tablet) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36' });
     const pc = await pcCtx.newPage(), pad = await padCtx.newPage();
+    pad.on('websocket', ws => ws.on('framereceived', ({payload}) => {
+      if (typeof payload === 'string' && payload.includes('fixture_connection')) padConnections.push(payload);
+    }));
     for (const p of [pc, pad]) {
       p.on('pageerror', e => errors.push(e.message));
       p.on('request', r => { if (/\/api\/booking\/(open|accept|btn-press)$/.test(r.url())) bookingActions.push(r.url()); });
@@ -24,7 +27,17 @@ fs.mkdirSync(artifacts, { recursive: true });
     await pc.getByPlaceholder('请输入11位手机号').fill('13812345678');
     await pc.getByPlaceholder('出口称重（kg）').fill('1234');
     await pc.waitForTimeout(800);
-    await pad.goto(url); await pad.locator('.session-restore-mask').waitFor({ state: 'hidden' });
+    // 先进入真实登录页，已有匿名WS；登录后必须重新认证，不能只验证预填token的页面。
+    await pad.goto(url + '?login=1#/login');
+    await pad.waitForFunction(() => document.querySelector('.login-page'));
+    await pad.waitForTimeout(300);
+    assert.ok(padConnections.some(v => v.includes('"authenticated":false')));
+    await pad.getByPlaceholder('请输入查验人账号').fill('sync-test');
+    await pad.getByPlaceholder('请输入密码').fill('fixture-password');
+    await pad.locator('.btn-login').click();
+    await pad.locator('.session-restore-mask').waitFor({ state: 'hidden' });
+    await pad.waitForTimeout(300);
+    assert.ok(padConnections.some(v => v.includes('"authenticated":true')), '登录后仍使用匿名WS，不能接收共享会话');
     assert.equal(await pad.getByPlaceholder('请输入11位手机号').inputValue(), '13812345678');
     assert.equal(await pad.getByPlaceholder('出口称重（kg）').inputValue(), '1234');
     await pc.getByTitle('检测进行中，请提交或重置后再预约', { exact: true }).click();
@@ -93,6 +106,6 @@ fs.mkdirSync(artifacts, { recursive: true });
     assert.ok((await pad.locator('.booking-dialog').innerText()).includes('4.00米'));
     assert.deepEqual(bookingActions, []);
     assert.deepEqual(errors, []);
-    console.log('PASS PC→Pad恢复、照片追加、证据选择、3D恢复、透视删除同步、查验选择同步、两新图提交、备注保存、双端重置、预约草稿无重复动作、检测中预约零请求；pageerrors=0');
+    console.log('PASS 匿名WS→真实登录→重新认证并持续同步、PC→Pad恢复、照片追加、证据选择、3D恢复、透视删除同步、查验选择同步、两新图提交、备注保存、双端重置、预约草稿无重复动作、检测中预约零请求；pageerrors=0');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

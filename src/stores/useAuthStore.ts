@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { loginApi, getCurrentUserApi } from '@/api/auth'
+import { useWsStore } from '@/stores/useWsStore'
 
 export interface UserInfo {
   username: string
@@ -148,6 +149,9 @@ export const useAuthStore = defineStore('auth', () => {
 
         // 记住我：localStorage（持久），否则 sessionStorage（关浏览器就清）
         const s = remember ? localStorage : sessionStorage
+        const other = remember ? sessionStorage : localStorage
+        other.removeItem(STORAGE_TOKEN)
+        other.removeItem(STORAGE_USER)
         s.setItem(STORAGE_TOKEN, token)
         s.setItem(STORAGE_USER, JSON.stringify(userInfo))
         if (remember) {
@@ -167,6 +171,8 @@ export const useAuthStore = defineStore('auth', () => {
         sessionPassword.value = pwd
         sessionStorage.setItem(STORAGE_SESSION_PWD, pwd)
 
+        useWsStore().connect()
+
         return true
       }
 
@@ -182,6 +188,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** 退出登录（保留记住我信息用于下次自动填充） */
   function logout() {
+    useWsStore().disconnect()
     user.value = null
     reviewerPhone.value = ''
     reviewerName.value = ''
