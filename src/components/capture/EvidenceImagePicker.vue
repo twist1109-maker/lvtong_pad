@@ -101,7 +101,7 @@ header { justify-content: space-between; font-size: 20px; }
 button { cursor: pointer; font: inherit; border: 1px solid #b7cfc4; border-radius: 6px; background: #fff; color: inherit; padding: 8px 14px; }
 button:disabled { cursor: default; opacity: .55; }
 .hint { margin: 12px 20px; }
-.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; padding: 4px 20px 20px; overflow: auto; min-height: 150px; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); grid-auto-rows: max-content; align-content: start; gap: 14px; padding: 4px 20px 20px; overflow: auto; min-height: 150px; }
 .image-card { border: 2px solid #dce8e2; border-radius: 8px; overflow: hidden; }
 .image-card.selected { border-color: #169c72; background: #eaf9f2; }
 .preview { display: block; width: 100%; height: 140px; padding: 0; border: 0; border-radius: 0; background: #f3f5f4; }
