@@ -216,6 +216,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <Teleport to="body">
   <div class="scan-overlay">
     <div class="scan-dialog" :class="{ 'scan-dialog-compact': source !== 'camera' }" role="dialog" aria-modal="true" :aria-label="!source ? '选择扫码方式' : '扫描通行码'">
       <div class="scan-titlebar">
@@ -273,6 +274,7 @@ onBeforeUnmount(() => {
       @close="onTipClose"
     />
   </div>
+  </Teleport>
 </template>
 
 <style scoped lang="scss">
