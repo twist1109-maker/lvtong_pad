@@ -60,3 +60,14 @@ test('车牌没有颜色后缀时保留完整车牌，避免误用车牌末位�
   assert.equal(parsePasscode(plain.join('|'))?.vehicleDisplayId, '鄂A12345')
   assert.equal(parsePasscode(plain.join('|'))?.vehicleColorName, '')
 })
+
+test('现场USB扫码样本按原14段回填，不丢入口、重量、金额及车辆标识', () => {
+  const raw = '鄂ACB1870_4|S0002420010010|S0017420020020|4120|3140|2|S001742002002040101302026111312139932|020000450101620038065020261113113728|2026-11-13T12:13:43|0|2600|2600|0xFF|1'
+  assert.deepEqual(parsePasscode(raw), {
+    valid: true, vehicleId: '鄂ACB1870_4', vehicleDisplayId: '鄂ACB1870', vehicleColorName: '4',
+    enStationId: 'S0002420010010', exStationId: 'S0017420020020', enWeight: '4120', exWeight: '3140',
+    mediaTypeId: 2, transactionId: 'S001742002002040101302026111312139932',
+    passId: '020000450101620038065020261113113728', exTime: '2026-11-13T12:13:43', transPayTypeId: 0,
+    fee: '2600', payFee: '2600', vehicleSignId: 255, provinceCount: '1',
+  })
+})

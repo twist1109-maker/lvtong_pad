@@ -3,7 +3,7 @@
  * 通行码扫码 — 对齐安卓 App 扫通行码后立即上传 JSON（仅 passcodeQRCodeInfo）
  * 识别结果立即回填；上传走 /api/mobile/upload/json，与手机 App 共用协议。
  */
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
 import { useDeviceCamera } from '@/composables/useDeviceCamera'
 import {
@@ -14,20 +14,17 @@ import {
   uploadMobileJson,
 } from '@/modules/padCapture/mobileProtocol'
 import {
-  hasScannerEncodingArtifacts,
   normalizePasscodeRaw,
   parsePasscode,
   type PasscodeInfo,
 } from '@/modules/padCapture/passcode'
 
-const props = withDefaults(defineProps<{ autoScan?: boolean; initialSource?: 'camera' | 'scanner' }>(), { autoScan: true })
+const props = withDefaults(defineProps<{ autoScan?: boolean; initialSource?: 'camera' }>(), { autoScan: true })
 const emit = defineEmits<{ close: []; decoded: [info: PasscodeInfo, image: string] }>()
 
 const source = ref(props.initialSource ?? null)
 const videoRef = ref<HTMLVideoElement | null>(null)
 const photoInput = ref<HTMLInputElement | null>(null)
-const scannerInput = ref<HTMLTextAreaElement | null>(null)
-const scannerText = ref('')
 const photoPicking = ref(false)
 const camera = useDeviceCamera(videoRef)
 const { status: cameraStatus, error: cameraError } = camera
@@ -40,7 +37,6 @@ const tipOk = ref(true)
 const scannedRaw = ref('')
 
 let scanTimer = 0
-let scannerTimer = 0
 let closed = false
 const uploadController = new AbortController()
 
@@ -65,23 +61,19 @@ function onClose() {
   closed = true
   uploadController.abort()
   stopScan()
-  window.clearTimeout(scannerTimer)
   stopStream()
   emit('close')
 }
 
-async function selectSource(value: 'camera' | 'scanner') {
+async function selectSource(value: 'camera') {
   source.value = value
   await nextTick()
   if (value === 'camera') await openStream()
-  else scannerInput.value?.focus()
 }
 
 function backToSources() {
   stopScan()
   stopStream()
-  window.clearTimeout(scannerTimer)
-  scannerText.value = ''
   source.value = null
 }
 
@@ -118,18 +110,9 @@ async function scanOnce() {
 async function acceptPasscode(raw: string, snapshot = '') {
   if (closed || uploading.value) return
   const normalizedRaw = normalizePasscodeRaw(raw)
-  // 扫码枪输入框也展示规范化结果，避免界面仍显示设备原始乱码而让操作员误判。
-  if (source.value === 'scanner' && scannerText.value !== normalizedRaw) {
-    scannerText.value = normalizedRaw
-  }
   const info = parsePasscode(normalizedRaw)
   if (!info) {
-    showTip(
-      hasScannerEncodingArtifacts(normalizedRaw)
-        ? '扫码枪输出存在乱码。请设置为 USB KBW/HID、美式键盘和正确中文字符集后重新扫描。'
-        : '通行码内容无效',
-      false,
-    )
+    showTip('通行码内容无效', false)
     scheduleScan()
     return
   }
@@ -168,10 +151,6 @@ function onTipClose() {
   if (tipOk.value) onClose()
   else {
     scheduleScan()
-    if (source.value === 'scanner') void nextTick(() => {
-      scannerInput.value?.focus()
-      scannerInput.value?.select()
-    })
   }
 }
 
@@ -223,23 +202,6 @@ async function recognizePhoto(event: Event) {
   }
 }
 
-async function recognizeScanner(showInvalid = false) {
-  window.clearTimeout(scannerTimer)
-  if (closed || source.value !== 'scanner' || scannedRaw.value || uploading.value || tipVisible.value) return
-  const raw = scannerText.value.trim()
-  if (!parsePasscode(raw)) {
-    if (showInvalid) showTip('扫码仪未读取到有效通行码，请重新扫描', false)
-    return
-  }
-  await acceptPasscode(raw)
-}
-
-watch(scannerText, () => {
-  window.clearTimeout(scannerTimer)
-  // 兼容以回车结束或仅连续输入字符的键盘式扫码仪，也支持粘贴完整通行码。
-  scannerTimer = window.setTimeout(() => { void recognizeScanner() }, 200)
-})
-
 onMounted(async () => {
   await nextTick()
   if (source.value) await selectSource(source.value)
@@ -249,27 +211,21 @@ onBeforeUnmount(() => {
   closed = true
   uploadController.abort()
   stopScan()
-  window.clearTimeout(scannerTimer)
   stopStream()
 })
 </script>
 
 <template>
   <div class="scan-overlay">
-    <div class="scan-dialog" :class="{ 'scan-dialog-compact': source !== 'camera' }" role="dialog" aria-modal="true" :aria-label="!source ? '选择扫码方式' : source === 'camera' ? '扫描通行码' : '扫码仪识别'">
+    <div class="scan-dialog" :class="{ 'scan-dialog-compact': source !== 'camera' }" role="dialog" aria-modal="true" :aria-label="!source ? '选择扫码方式' : '扫描通行码'">
       <div class="scan-titlebar">
-        <span class="scan-title">{{ !source ? '选择扫码方式' : source === 'camera' ? '扫描通行码' : '扫码仪识别' }}</span>
+        <span class="scan-title">{{ !source ? '选择扫码方式' : '扫描通行码' }}</span>
         <button type="button" class="scan-x" title="关闭" @click="onClose">×</button>
       </div>
 
       <div v-if="!source" class="source-options">
         <button type="button" class="source-option" @click="selectSource('camera')">摄像头<span>实时扫描，自动识别</span></button>
-        <button type="button" class="source-option" @click="selectSource('scanner')">扫码仪<span>USB／蓝牙扫码仪输入</span></button>
-      </div>
-      <div v-else-if="source === 'scanner'" class="scanner-body">
-        <label for="passcode-scanner-input">请连接扫码仪，将光标保持在下方输入框，扫描后自动识别。</label>
-        <textarea id="passcode-scanner-input" ref="scannerInput" v-model="scannerText" aria-label="扫码仪输入" placeholder="等待扫码仪输入，也可粘贴通行码" :disabled="uploading || !!scannedRaw" spellcheck="false" @keydown.enter.prevent="recognizeScanner(true)" />
-        <p>支持以键盘方式输入的 USB／蓝牙扫码仪。</p>
+        <button type="button" class="source-option" @click="onClose">返回主页直接扫码<span>USB／蓝牙扫码仪已自动接收，无需输入框</span></button>
       </div>
       <div v-else class="scan-body">
         <div class="scan-stage">
@@ -360,14 +316,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
   span { display: block; margin-top: 12px; font-size: 14px; font-weight: 400; }
   &:hover { background: #e9f7f2; }
-}
-.scanner-body {
-  display: grid;
-  gap: 14px;
-  padding: 24px;
-  font-size: 16px;
-  textarea { width: 100%; height: 140px; padding: 12px; border: 1px solid $primary; border-radius: 4px; resize: none; font-size: 16px; }
-  p { color: #666; font-size: 14px; }
 }
 
 .scan-titlebar {

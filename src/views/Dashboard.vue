@@ -45,6 +45,7 @@ import CaptureCameraDialog from '@/components/capture/CaptureCameraDialog.vue'
 import type { CaptureKind } from '@/components/capture/CaptureCameraDialog.vue'
 import DrivingLicenseDialog from '@/components/capture/DrivingLicenseDialog.vue'
 import PasscodeScanDialog from '@/modules/padCapture/PasscodeScanDialog.vue'
+import PasscodeScannerReceiver from '@/modules/padCapture/PasscodeScannerReceiver.vue'
 import type { PasscodeInfo } from '@/modules/padCapture/passcode'
 import { useBookingStore } from '@/modules/booking'
 import type {
@@ -70,8 +71,9 @@ const showHistory = ref(false)
 const showSafeCameraDialog = ref(false)
 const showTalkDialog = ref(false)
 watch(() => bookingStore.dialogVisible, () => { showTalkDialog.value = false })
-/** 通行码先选择摄像头或键盘式扫码仪。 */
+/** USB扫码在主页直接接收；此入口保留摄像头/照片识别。 */
 const showPasscodeScan = ref(false)
+const scannerEpoch = ref(0)
 
 function onPasscodeScan() {
   showPasscodeScan.value = true
@@ -1875,6 +1877,7 @@ function doReset() {
   }
   // 清通行码
   passcode.value = null
+  scannerEpoch.value++
   // 清工作流状态
   bookingStore.reset()
   workflow.value.bookingActive = false
@@ -2991,6 +2994,7 @@ const anyDialogOpen = computed(
             <img src="/assets/img/lv_info.png" class="panel-icon" alt="" />
             <span class="panel-title">绿通信息</span>
             <div class="passcode-scan-wrap">
+              <PasscodeScannerReceiver :key="scannerEpoch" :enabled="!anyDialogOpen" @decoded="applyPasscode" />
               <button
                 type="button"
                 class="header-icon-btn"

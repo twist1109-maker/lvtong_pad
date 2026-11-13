@@ -99,7 +99,7 @@ const router = createRouter({
     { path: '/scan', component: { render: () => h(PasscodeScanDialog, { initialSource: 'camera' }) } },
     { path: '/scan-manual', component: { render: () => h(PasscodeScanDialog, { initialSource: 'camera', autoScan: false }) } },
     { path: '/scan-source', component: PasscodeScanDialog },
-    { path: '/scanner', component: { render: () => h(PasscodeScanDialog, { initialSource: 'scanner' }) } },
+    { path: '/scanner', redirect: '/' },
     { path: '/history', component: HistoryDialog },
     { path: '/booking', component: BookingDialog },
     { path: '/users', component: UserManager },
