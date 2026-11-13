@@ -71,7 +71,7 @@ const showHistory = ref(false)
 const showSafeCameraDialog = ref(false)
 const showTalkDialog = ref(false)
 watch(() => bookingStore.dialogVisible, () => { showTalkDialog.value = false })
-/** USB扫码在主页直接接收；此入口保留摄像头/照片识别。 */
+/** 扫码仪在主页直接接收；点击图标直接打开当前终端摄像头。 */
 const showPasscodeScan = ref(false)
 const scannerEpoch = ref(0)
 
@@ -2999,6 +2999,7 @@ const anyDialogOpen = computed(
                 type="button"
                 class="header-icon-btn"
                 title="通行码"
+                aria-label="摄像头扫描通行码"
                 @click.stop="onPasscodeScan"
               >
                 <img src="/assets/img/ze-scan.png" alt="" />
@@ -3102,6 +3103,7 @@ const anyDialogOpen = computed(
 
     <PasscodeScanDialog
       v-if="showPasscodeScan"
+      initial-source="camera"
       @decoded="applyPasscode"
       @close="showPasscodeScan = false"
     />

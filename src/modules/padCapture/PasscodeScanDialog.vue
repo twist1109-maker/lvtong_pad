@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
         >
           {{ capturing ? '识别中…' : '照片识别' }}
         </button>
-        <button v-if="!scannedRaw" type="button" class="btn-secondary" :disabled="uploading || capturing || photoPicking" @click="backToSources">返回选择</button>
+        <button v-if="!scannedRaw && !props.initialSource" type="button" class="btn-secondary" :disabled="uploading || capturing || photoPicking" @click="backToSources">返回选择</button>
         <button type="button" class="btn-secondary" :disabled="uploading" @click="onClose">
           取消
         </button>
@@ -353,6 +353,8 @@ onBeforeUnmount(() => {
 .scan-body {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 10px 14px 0;
 }
 
@@ -365,12 +367,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 280px;
+  min-height: 0;
+  flex: 1;
 }
 
 .scan-video {
   width: 100%;
   height: min(48vh, 380px);
+  min-height: 0;
   object-fit: contain;
   background: #1a1a1a;
 }
@@ -403,6 +407,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 14px 16px 16px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .btn-primary,
