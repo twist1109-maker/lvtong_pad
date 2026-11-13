@@ -9,7 +9,7 @@ export const SEGMENT_PIX = METER_PIX * 8
 export const BASE_Y = 58
 const TEXT_W = 10
 
-/** 五个流程段起始 X（预约/闸机/光机/拍照/审核） */
+/** 五个流程段起始 X（预约/闸机/光机/拍照/提示） */
 export const SEGMENT_LEFTS = [0, 1, 2, 3, 4].map((i) => START_POS_X + i * SEGMENT_PIX)
 
 /**

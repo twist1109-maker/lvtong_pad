@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { SEGMENT_PIX, START_POS_X, SCENE_WIDTH } from '@/constants/workflowLayout'
 import type { XrayMachinePhase } from '@/utils/plcXrayStatus'
 import { XRAY_PHASE_ICONS } from '@/utils/plcXrayStatus'
+import PromptVoiceButton from '@/components/PromptVoiceButton.vue'
 
 export type WorkflowStepKey = 'book' | 'gate' | 'xray' | 'camera' | 'audit'
 
@@ -71,7 +72,7 @@ const items = computed<WorkflowItem[]>(() => [
   },
   { key: 'xray', label: '光机', icon: xrayIcon.value },
   { key: 'camera', label: '拍照', icon: '/assets/img/a_xj_offline.png' },
-  { key: 'audit', label: '审核', icon: '/assets/img/a_sh.png' },
+  { key: 'audit', label: '提示', icon: '/assets/img/a_sh.png' },
 ])
 
 const leadSpacerPct = `${(START_POS_X / SCENE_WIDTH) * 100}%`
@@ -82,9 +83,10 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
   <div class="workflow-icons">
     <div class="workflow-row">
       <div class="lead-spacer" :style="{ width: leadSpacerPct }" />
+      <template v-for="item in items" :key="item.key">
+      <PromptVoiceButton v-if="item.key === 'audit'" :style="{ width: cellWidthPct }" />
       <button
-        v-for="item in items"
-        :key="item.key"
+        v-else
         :disabled="item.key === 'gate' && gatePending"
         :aria-busy="item.key === 'gate' && gatePending"
         type="button"
@@ -117,6 +119,7 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
           {{ item.key === 'gate' && gatePending ? '等待反馈' : item.key === 'gate' && gateMessage ? '状态未确认' : item.label }}
         </span>
       </button>
+      </template>
     </div>
   </div>
 </template>

@@ -39,6 +39,26 @@ export function announceCaptureVoiceApi(step: 6 | 7 | 8) {
   })
 }
 
+export interface PromptVoiceState {
+  active: boolean
+  step: number | null
+  phase: 'playing' | 'gap' | 'waiting' | 'stopped'
+  error: string
+  version: number
+  instance: string
+  options: { step: number; text: string }[]
+}
+
+export function getPromptVoiceApi() {
+  return request<PromptVoiceState>('/device/voice/prompt', { timeout: 7000 })
+}
+
+export function controlPromptVoiceApi(action: 'start' | 'stop', step?: number) {
+  return request<PromptVoiceState>('/device/voice/prompt', {
+    method: 'POST', body: JSON.stringify({ action, ...(action === 'start' ? { step } : {}) }), timeout: 7000,
+  })
+}
+
 /**
  * 读取摄像头 Web 预览配置
  * GET /api/device/<deviceId>/preview-config

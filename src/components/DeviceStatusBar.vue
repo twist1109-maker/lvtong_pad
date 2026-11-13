@@ -12,7 +12,7 @@ const devices: DeviceItem[] = [
   { key: 'light', label: '光幕', icon: '/assets/img/a_gj.png', iconOnline: '/assets/img/a_gj_online.png' },
   { key: 'gate', label: '闸机', icon: '/assets/img/a_zj.png', iconOnline: '/assets/img/a_zj_online.png' },
   { key: 'book', label: '预约', icon: '/assets/img/a_lc_offline.png', iconOnline: '/assets/img/a_lc_online.png' },
-  { key: 'audit', label: '审核', icon: '/assets/img/a_sh.png' },
+  { key: 'audit', label: '提示', icon: '/assets/img/a_sh.png' },
   { key: 'camera', label: '拍照', icon: '/assets/img/a_xj_offline.png', iconOnline: '/assets/img/a_xj_online.png' },
 ]
 
