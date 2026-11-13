@@ -369,7 +369,8 @@ const radarObjectCount = ref(0)
 const isPreGateLaneBlocked = computed(() => {
   if (!bookingStore.isDetection || gateReleased.value) return false
   // 占用状态由后端按统一阈值和连续帧判定；前端不再用抖动的物体数重复推断。
-  return laneOccupied.value
+  // 五帧净空确认期间持续显示占用，不能被受理事件或漏掉的WS消息提前清除。
+  return laneOccupied.value || bookingStore.checkStep === 1
 })
 
 const bodyPlaceholderTone = computed((): 'default' | 'occupied' | 'waiting' => {
