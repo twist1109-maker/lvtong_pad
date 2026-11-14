@@ -27,25 +27,28 @@ window.probeReady=true;`;
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto('http://127.0.0.1:5199/diagnostic');
     await page.waitForFunction(() => window.probeReady);
-    const images = await page.evaluate(() => [400, 200].map(h => { const c = document.createElement('canvas'); c.width = 1600; c.height = h; const x = c.getContext('2d'); x.fillStyle = '#cbe8dd'; x.fillRect(0, 0, 1600, h); x.fillStyle = '#27624b'; x.font = '70px sans-serif'; x.fillText('BODY XRAY SCAN', 60, 160); return c.toDataURL('image/png').split(',')[1] }));
+    const images = await page.evaluate(() => [400, 200, 1000].map(h => { const c = document.createElement('canvas'); c.width = 1600; c.height = h; const x = c.getContext('2d'); x.fillStyle = '#cbe8dd'; x.fillRect(0, 0, 1600, h); x.fillStyle = '#27624b'; x.font = '70px sans-serif'; x.fillText('BODY XRAY SCAN', 60, 160); return c.toDataURL('image/png').split(',')[1] }));
     await page.route('**/frame-*.png', async r => {
       const url = r.request().url();
       if (url.includes('slow')) await new Promise(resolve => setTimeout(resolve, 500));
       if (url.includes('bad')) { await r.fulfill({ status: 404 }); return }
-      await r.fulfill({ contentType: 'image/png', body: Buffer.from(images[url.includes('wide') ? 1 : 0], 'base64') });
+      await r.fulfill({ contentType: 'image/png', body: Buffer.from(images[url.includes('tall') ? 2 : url.includes('wide') ? 1 : 0], 'base64') });
     });
     const waitFrame = url => page.waitForFunction(url => document.querySelector('.body-image')?.getAttribute('src') === url, url);
-    const geometry = () => page.evaluate(() => { const f = document.querySelector('.fit'), s = document.querySelector('.stage'), i = document.querySelector('.body-image'); return { fit: [f.clientWidth, f.clientHeight], stage: [s.clientWidth, s.clientHeight], src: i.getAttribute('src'), complete: i.complete } });
+    const geometry = () => page.evaluate(() => { const f = document.querySelector('.fit'), s = document.querySelector('.stage'), i = document.querySelector('.body-image'), fr = f.getBoundingClientRect(), sr = s.getBoundingClientRect(); return { fit: [f.clientWidth, f.clientHeight], stage: [s.clientWidth, s.clientHeight], centerOffset: [(fr.left + fr.right - sr.left - sr.right) / 2, (fr.top + fr.bottom - sr.top - sr.bottom) / 2], src: i.getAttribute('src'), complete: i.complete } });
+    const assertCentered = state => assert.ok(state.centerOffset.every(n => Math.abs(n) <= 1), JSON.stringify(state));
     await page.evaluate(() => window.setFrame('/frame-first.png', '/original-first'));
     await waitFrame('/frame-first.png');
     await page.waitForTimeout(170);
     const initial = await geometry();
     assert.deepEqual(initial.fit, [900, 225]);
+    assertCentered(initial);
     await page.evaluate(() => { window.samples = []; function sample() { const f = document.querySelector('.fit'), s = document.querySelector('.stage'), i = document.querySelector('.body-image'); if (f && s && i) window.samples.push({ fit: [f.clientWidth, f.clientHeight], stage: [s.clientWidth, s.clientHeight], complete: i.complete, src: i.getAttribute('src') }); requestAnimationFrame(sample) } sample() });
     await page.evaluate(() => window.setFrame('/frame-slow-same.png'));
     await page.waitForTimeout(200);
     const duringLoading = await geometry();
     assert.deepEqual(duringLoading.fit, initial.fit);
+    assertCentered(duringLoading);
     assert.equal(duringLoading.src, '/frame-first.png');
     await page.screenshot({ path: out + '/slow-frame-retained.png' });
     await waitFrame('/frame-slow-same.png');
@@ -57,10 +60,16 @@ window.probeReady=true;`;
     await waitFrame('/frame-wide-latest.png');
     await page.waitForTimeout(200);
     const wide = await geometry(); assert.deepEqual(wide.fit, [900, 112]);
+    assertCentered(wide);
     const samples = await page.evaluate(() => window.samples);
     assert.ok(samples.every(s => s.complete && s.fit[0] <= s.stage[0] && s.fit[1] <= s.stage[1]));
     assert.ok(!samples.some(s => s.src === '/frame-skip.png'));
     await page.screenshot({ path: out + '/wide-frame-fitted.png' });
+    // 高度限制时左右留白均分，覆盖PC截图中明显偏左的布局。
+    await page.evaluate(() => window.setFrame('/frame-tall.png'));
+    await waitFrame('/frame-tall.png'); await page.waitForTimeout(180);
+    const tall = await geometry(); assert.deepEqual(tall.fit, [476, 298]); assertCentered(tall);
+    await page.screenshot({ path: out + '/height-limited-centered.png' });
     // 框选期间即便新帧已就绪，裁切仍使用手势开始时的原图和尺寸。
     await page.evaluate(() => window.setFrame('/frame-select.png', '/original-selected'));
     await waitFrame('/frame-select.png'); await page.waitForTimeout(180);
@@ -82,13 +91,14 @@ window.probeReady=true;`;
     // 生产ScreenScaler会整体transform；屏幕像素不能写回布局CSS尺寸。
     await page.evaluate(() => { const host = document.querySelector('#frame-host'); host.style.transform = 'scale(0.5)'; host.style.transformOrigin = 'left top'; return window.setFrame('/frame-scaled.png', '/original-scaled') });
     await waitFrame('/frame-scaled.png'); await page.waitForTimeout(180);
+    assertCentered(await geometry());
     const scaledBox = await page.locator('.fit').boundingBox();
     await page.mouse.move(scaledBox.x + scaledBox.width * .2, scaledBox.y + scaledBox.height * .2); await page.mouse.down();
     await page.mouse.move(scaledBox.x + scaledBox.width * .5, scaledBox.y + scaledBox.height * .6, { steps: 4 }); await page.mouse.up();
     const scaledCrop = await page.evaluate(() => { const { fallbackImage, ...p } = window.crops[1]; return p });
     assert.deepEqual(scaledCrop, { x1: 320, y1: 80, x2: 800, y2: 240, sourceTempUrl: '/original-scaled', displayWidth: 1600, displayHeight: 400 });
     assert.deepEqual(errors, []);
-    const report = { initial, duringLoading, wide, sampledFrames: samples.length, noOversizeFrames: true, selection: crop, scaledSelection: scaledCrop, lateFrameCannotReviveClearedPanel: true, errors };
+    const report = { initial, duringLoading, wide, tall, sampledFrames: samples.length, noOversizeFrames: true, selection: crop, scaledSelection: scaledCrop, lateFrameCannotReviveClearedPanel: true, errors };
     fs.writeFileSync(out + '/report.json', JSON.stringify(report, null, 2)); console.log(JSON.stringify(report));
   } finally { await browser.close(); await server.close() }
 })().catch(e => { console.error(e); process.exit(1) });
