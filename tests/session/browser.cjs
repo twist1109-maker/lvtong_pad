@@ -19,6 +19,7 @@ fs.mkdirSync(artifacts, { recursive: true });
       p.on('pageerror', e => errors.push(e.message));
       p.on('request', r => { if (/\/api\/booking\/(open|accept|btn-press)$/.test(r.url())) bookingActions.push(r.url()); });
       await p.route('**/mtx/**', r => r.fulfill({ status: 503, body: 'isolated camera' }));
+      await p.route('**/api/inspection/plate/*', r => r.fulfill({ json: { code: 0, data: { count: 0 } } }));
       p.on('dialog', d => { dialogs.push(d.message()); return d.accept(); });
     }
     const url = 'http://127.0.0.1:5197/tests/session/';

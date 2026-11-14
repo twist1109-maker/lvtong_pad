@@ -857,8 +857,21 @@ function isFormBlank(v: string | undefined | null): boolean {
   return !s || s === '--'
 }
 
+const plateHistoryRequests = new Map<string, Promise<void>>()
+
+/** 按会话和车牌合并正在进行的查询，不能用通行码是否已同步来判断查过历史。 */
+function applyPlateHistory(plate: string): Promise<void> {
+  const sessionId = getInspectionSessionId()
+  const key = `${sessionId}:${plate.trim()}`
+  const pending = plateHistoryRequests.get(key)
+  if (pending) return pending
+  const query = loadPlateHistory(plate, sessionId).finally(() => plateHistoryRequests.delete(key))
+  plateHistoryRequests.set(key, query)
+  return query
+}
+
 /** 车牌赋值后：查过往记录 → 仅空字段回填 + 查验次数（已填不覆盖） */
-async function applyPlateHistory(plate: string) {
+async function loadPlateHistory(plate: string, sessionId: string) {
   const p = plate.trim()
   if (!p || p === '--') {
     form.value.historyCount = '--'
@@ -870,7 +883,7 @@ async function applyPlateHistory(plate: string) {
       `/inspection/plate/${encodeURIComponent(p)}`,
     )
     // 请求期间可能已重新扫码／重置，旧车的历史不能回填到新车。
-    if (form.value.plate.trim() !== p) return
+    if (getInspectionSessionId() !== sessionId || form.value.plate.trim() !== p) return
     if (res.code !== 0 || !res.data) {
       form.value.historyCount = '--'
       plateHistoryRange.value = null
@@ -941,6 +954,7 @@ async function applyPlateHistory(plate: string) {
       }
     }
   } catch {
+    if (getInspectionSessionId() !== sessionId || form.value.plate.trim() !== p) return
     form.value.historyCount = '--'
     plateHistoryRange.value = null
   }
@@ -1581,15 +1595,13 @@ const passcode = ref<PasscodeInfo | null>(null)
 /** Pad 本地识别与 PC／手机消息走同一回填入口，不依赖 WebSocket 才显示结果。 */
 function applyPasscode(pc: PasscodeInfo, image = '') {
   if (!pc?.valid) return
-  const previous = passcode.value
-  const duplicate = previous?.vehicleId === pc.vehicleId && previous?.passId === pc.passId && previous?.exTime === pc.exTime
   passcode.value = pc
   if (image) captureThumbs.value.passcode = image
   if (pc.vehicleDisplayId) form.value.plate = pc.vehicleDisplayId
   if (pc.vehicleColorName) form.value.plateColor = pc.vehicleColorName
   if (pc.exWeight != null && String(pc.exWeight).trim() !== '') form.value.weight = String(pc.exWeight).trim()
-  // 本地回填后后台会再次推送相同通行码，避免重复查询历史。
-  if (!duplicate && pc.vehicleDisplayId) void applyPlateHistory(pc.vehicleDisplayId)
+  // 会话快照可能先于扫码通知到达；通行码已存在也仍需查询历史。
+  if (pc.vehicleDisplayId) void applyPlateHistory(pc.vehicleDisplayId)
 }
 
 /** 把任意图片引用转成可显示的 URL（前端 <img> 用）。
@@ -2275,6 +2287,8 @@ const sharedSession = new InspectionSessionSync({
   })).data,
   status: (message, error) => { syncMessage.value = message; syncError.value = error },
   apply: (snapshot, draft, changedSession) => {
+    const previousPlate = form.value.plate
+    const restoreHistory = !syncReady.value || changedSession
     applyingSharedDraft = !syncReady.value || changedSession || snapshot.activeClientId !== getInspectionClientId()
     if (changedSession || snapshot.phase === 'submitted') doReset()
     setInspectionSessionId(snapshot.sessionId)
@@ -2291,6 +2305,8 @@ const sharedSession = new InspectionSessionSync({
     if (draft.captureLists) captureLists.value = { ...captureLists.value, ...(draft.captureLists as typeof captureLists.value) }
     if (draft.licensePaths) licensePaths.value = { ...licensePaths.value, ...(draft.licensePaths as typeof licensePaths.value) }
     if ('passcode' in draft) passcode.value = draft.passcode as typeof passcode.value
+    // 刷新恢复和仅收到共享快照时也补查历史，不依赖后续扫码通知。
+    if (restoreHistory || form.value.plate !== previousPlate) void applyPlateHistory(form.value.plate)
     if ('submitRemark' in draft) submitRemark.value = String(draft.submitRemark || '')
     if ('previousSelection' in draft) previousSelection.value = draft.previousSelection as typeof previousSelection.value
     if (draft.submissionDraft) submissionDraft.value = draft.submissionDraft as Record<string, unknown>
