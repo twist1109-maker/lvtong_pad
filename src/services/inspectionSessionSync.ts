@@ -16,6 +16,14 @@ export interface DraftChange { path: string[]; value: unknown }
 const objectFields = new Set(['form', 'captureThumbs', 'licensePaths', 'captureLists', 'bookingDraft', 'panelImages', 'submissionDraft'])
 const clone = <T>(v: T): T => v == null ? v : JSON.parse(JSON.stringify(v))
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const valueAt = (draft: Draft, path: string[]) => path.reduce<unknown>((value, key) =>
+  value && typeof value === 'object' ? (value as Draft)[key] : undefined, draft)
+const mergeList = (base: unknown[], local: unknown[], remote: unknown[]) => {
+  const removed = base.filter(value => !local.some(item => same(item, value)))
+  const added = local.filter(value => !base.some(item => same(item, value)))
+  return [...remote.filter(value => !removed.some(item => same(item, value))),
+    ...added.filter(value => !remote.some(item => same(item, value)))]
+}
 
 export function diffDraft(before: Draft, after: Draft): DraftChange[] {
   const changes: DraftChange[] = []
@@ -49,9 +57,14 @@ export class InspectionSessionSync {
   applying = false
   private observed: Draft = {}
   private pending = new Map<string, DraftChange>()
+  private pendingBases = new Map<string, unknown>()
   private pendingRevision: number | null = null
   private saving: Promise<void> | null = null
+  private loading: Promise<void> | null = null
   private timer?: ReturnType<typeof setTimeout>
+  private recoveryTimer?: ReturnType<typeof setTimeout>
+  private pollTimer?: ReturnType<typeof setTimeout>
+  private failures = 0
   private closed = false
   private options: {
     read: () => Draft
@@ -59,20 +72,78 @@ export class InspectionSessionSync {
     load: () => Promise<SessionSnapshot>
     save: (snapshot: SessionSnapshot, changes: DraftChange[]) => Promise<SessionSnapshot>
     status: (message: string, error: boolean) => void
+    pollIntervalMs?: number
+    retryDelayMs?: number
   }
   constructor(options: InspectionSessionSync['options']) { this.options = options }
 
-  async restore() {
-    try {
-      this.receive(await this.options.load())
-      this.options.status(this.pending.size ? '有内容待同步' : '已同步', false)
-    } catch (e) { this.options.status(e instanceof Error ? e.message : '同步失败', true); throw e }
+  async restore(): Promise<void> {
+    if (this.closed) return
+    if (this.loading) return this.loading
+    const job = (async () => {
+      try {
+        const incoming = await this.options.load()
+        if (this.closed) return
+        const latest = this.snapshot && incoming.revision < this.snapshot.revision ? this.snapshot : incoming
+        this.rebase(latest)
+        this.receive(latest)
+        this.options.status(this.pending.size ? '正在同步…' : '已同步', false)
+        if (this.pending.size) this.scheduleSave()
+        else this.recovered()
+      } catch (e) { if (!this.closed) this.failed(e); throw e }
+    })()
+    this.loading = job
+    try { await job } finally {
+      this.loading = null
+      this.schedulePoll()
+    }
+  }
+  private rebase(snapshot: SessionSnapshot) {
+    if (snapshot.sessionId !== this.snapshot?.sessionId || snapshot.phase === 'submitted') return
+    for (const [key, change] of this.pending) {
+      const remote = valueAt(snapshot.draft, change.path), base = this.pendingBases.get(key)
+      // 两端同时追加照片时保留双方新增项；删除仅作用于本机原先见过的项。
+      if (Array.isArray(base) && Array.isArray(change.value) && Array.isArray(remote)) {
+        this.pending.set(key, { path: change.path, value: mergeList(base, change.value, remote) })
+      }
+      this.pendingBases.set(key, clone(remote))
+    }
+    this.pendingRevision = this.pending.size ? snapshot.revision : null
+  }
+  private scheduleSave() {
+    clearTimeout(this.timer)
+    if (!this.closed) this.timer = setTimeout(() => { void this.flush().catch(() => {}) }, 350)
+  }
+  private schedulePoll() {
+    clearTimeout(this.pollTimer)
+    const interval = this.options.pollIntervalMs ?? 5000
+    if (!this.closed && interval > 0) this.pollTimer = setTimeout(() => {
+      void this.restore().then(() => this.flush()).catch(() => {})
+    }, interval)
+  }
+  private recovered() {
+    this.failures = 0
+    clearTimeout(this.recoveryTimer)
+    this.recoveryTimer = undefined
+  }
+  private failed(error: unknown) {
+    const status = (error as { status?: number })?.status
+    this.options.status(`未同步：${error instanceof Error ? error.message : '连接失败'}，正在自动重试`, true)
+    if (this.closed || this.recoveryTimer || status === 401 || status === 403) return
+    const delay = Math.min((this.options.retryDelayMs ?? 1000) * 2 ** this.failures++, 10000)
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined
+      void this.restore().then(() => this.flush()).catch(() => {})
+    }, delay)
   }
   receive(snapshot: SessionSnapshot) {
     if (this.closed || !snapshot?.sessionId || !Number.isFinite(snapshot.revision)) return
     if (this.snapshot && snapshot.revision < this.snapshot.revision) return
     const changed = !!this.snapshot && snapshot.sessionId !== this.snapshot.sessionId
-    if (changed || snapshot.phase === 'submitted') { this.pending.clear(); this.pendingRevision = null }
+    if (changed || snapshot.phase === 'submitted') {
+      this.pending.clear(); this.pendingBases.clear(); this.pendingRevision = null
+      clearTimeout(this.timer)
+    }
     this.snapshot = clone(snapshot)
     this.ready = true
     this.applying = true
@@ -80,49 +151,73 @@ export class InspectionSessionSync {
       this.options.apply(snapshot, overlay(snapshot.draft || {}, this.pending.values()), changed)
       this.observed = clone(this.options.read())
     } finally { this.applying = false }
+    if (!this.pending.size) { this.recovered(); this.options.status('已同步', false) }
+    else if (!this.saving) this.scheduleSave()
   }
   changed() {
     if (!this.ready || this.applying || this.closed) return
     const next = this.options.read()
     for (const change of diffDraft(this.observed, next)) {
       if (!this.pending.size) this.pendingRevision = this.snapshot?.revision ?? null
-      this.pending.set(change.path.join('.'), change)
+      const key = change.path.join('.')
+      if (!this.pending.has(key)) this.pendingBases.set(key, clone(valueAt(this.observed, change.path)))
+      this.pending.set(key, change)
     }
     this.observed = clone(next)
     if (!this.pending.size) return
     this.options.status('正在同步…', false)
-    clearTimeout(this.timer)
-    this.timer = setTimeout(() => { void this.flush().catch(() => {}) }, 350)
+    this.scheduleSave()
   }
   async flush(): Promise<void> {
     clearTimeout(this.timer)
-    if (this.saving) { await this.saving; if (this.pending.size) return this.flush(); return }
+    if (this.saving) { await this.saving; if (this.pending.size && !this.closed) return this.flush(); return }
     if (!this.pending.size || !this.snapshot || this.closed) return
-    const snapshot = clone(this.snapshot)
-    snapshot.revision = this.pendingRevision ?? snapshot.revision
-    const changes = clone([...this.pending.values()])
-    this.saving = (async () => {
+    const job = this.savePending()
+    this.saving = job
+    try { await job } finally { this.saving = null }
+  }
+  private async savePending() {
+    let conflicts = 0
+    while (this.pending.size && this.snapshot && !this.closed) {
+      const snapshot = clone(this.snapshot)
+      snapshot.revision = this.pendingRevision ?? snapshot.revision
+      const changes = clone([...this.pending.values()])
       try {
         const result = await this.options.save(snapshot, changes)
-        if (this.snapshot?.sessionId !== snapshot.sessionId) return
+        if (this.closed) return
+        if (this.snapshot?.sessionId !== snapshot.sessionId) continue
         for (const change of changes) {
           const key = change.path.join('.')
-          if (same(this.pending.get(key), change)) this.pending.delete(key)
+          if (same(this.pending.get(key), change)) {
+            this.pending.delete(key); this.pendingBases.delete(key)
+          } else if (this.pending.has(key)) this.pendingBases.set(key, clone(change.value))
         }
         this.pendingRevision = this.pending.size ? result.revision : null
         this.receive(result.revision >= this.snapshot.revision ? result : this.snapshot)
         this.options.status(this.pending.size ? '正在同步…' : '已同步', false)
+        this.recovered()
       } catch (e) {
+        if (this.closed) return
+        if (this.snapshot?.sessionId !== snapshot.sessionId) continue
         const conflict = e as { status?: number; data?: SessionSnapshot }
-        if (conflict.status === 409 && conflict.data?.sessionId !== this.snapshot?.sessionId && conflict.data?.sessionId) this.receive(conflict.data)
-        this.options.status(e instanceof Error ? `未同步：${e.message}` : '未同步，请重试', true)
+        if (conflict.status === 409 && conflicts++ < 2) {
+          if (conflict.data?.sessionId) {
+            const latest = conflict.data.revision >= this.snapshot.revision ? conflict.data : this.snapshot
+            this.rebase(latest)
+            this.receive(latest)
+          } else await this.restore()
+          if (!this.pending.size) { this.options.status('已同步', false); this.recovered() }
+          continue
+        }
+        this.failed(e)
         throw e
       }
-    })()
-    try { await this.saving } finally { this.saving = null }
-    if (this.pending.size) return this.flush()
+    }
   }
-  dispose() { this.closed = true; clearTimeout(this.timer) }
+  dispose() {
+    this.closed = true
+    clearTimeout(this.timer); clearTimeout(this.recoveryTimer); clearTimeout(this.pollTimer)
+  }
 }
 
 export async function materializeDraftImages(changes: DraftChange[]): Promise<DraftChange[]> {

@@ -1826,23 +1826,56 @@ async function onGateIconClick() {
 
 // ---- 重置 / 确认 ----
 /** 对齐 LvTongPro::onReset：先弹 QMessageBox 二次确认 */
+const resetBusy = ref(false)
+let resetSessionId = ''
 function onReset() {
+  if (resetBusy.value) return
+  resetSessionId = getInspectionSessionId()
   showResetConfirmBox.value = true
 }
 
 async function onResetConfirmYes() {
   showResetConfirmBox.value = false
-  // 先停后端调度/透视轮询，再清前端，避免迟到的 image_ready 把透视图填回
+  if (resetBusy.value) return
+  resetBusy.value = true
+  const target = resetSessionId
   try {
-    const r = await request('/booking/reset', { method: 'POST' })
-    console.info('[booking] reset 响应:', r.code, r.message)
-  } catch (e) {
-    console.warn('[booking] reset 失败:', e)
-    alert('重置失败，当前检测内容已保留')
-    return
+    if (!appConfig.useMock) {
+      // 确认框打开后可能已在另一终端切单，不能把旧确认用于重置下一辆车。
+      try { await sharedSession.restore() } catch {
+        alert('暂时无法确认当前检测状态，正在自动同步，请稍后再试')
+        return
+      }
+      if (getInspectionSessionId() !== target) {
+        if (sharedSession.snapshot?.phase !== 'idle') alert('检测内容已更新，请核对当前检测后再操作')
+        return
+      }
+    }
+    // 先停后端采集，再采用新会话，避免迟到数据回填；重置命令不自动重发。
+    try {
+      const result = await request('/booking/reset', { method: 'POST' })
+      if (result.code !== 0) throw new Error(result.message || '重置未完成')
+    } catch (error) {
+      console.warn('[booking] reset 请求未确认:', error)
+      if (!appConfig.useMock) {
+        try {
+          await sharedSession.restore()
+          if (getInspectionSessionId() !== target) {
+            if (sharedSession.snapshot?.phase !== 'idle') alert('检测内容已更新，请核对当前检测后再操作')
+            return
+          }
+        } catch { /* 自动恢复继续核对，不能重复发送可能已执行的设备命令。 */ }
+      }
+      alert(`未能确认重置结果：${error instanceof Error ? error.message : '连接失败'}。正在自动同步，请核对页面后再操作`)
+      return
+    }
+    if (appConfig.useMock) doReset()
+    else {
+      try { await sharedSession.restore() } catch { /* 重置已成功，自动同步恢复负责拉取新会话。 */ }
+    }
+  } finally {
+    resetBusy.value = false
   }
-  if (appConfig.useMock) doReset()
-  else await sharedSession.restore()
 }
 
 function onResetConfirmNo() {
@@ -2369,7 +2402,13 @@ async function retrySessionSync() {
 function setupWS() {
   const unSession = wsStore.subscribe('inspection_session', msg => sharedSession.receive(msg.data as SessionSnapshot))
   const unRestore = watch(() => wsStore.isConnected, connected => { if (connected && !appConfig.useMock) void sharedSession.restore().catch(() => {}) })
-  onUnmounted(() => { unSession(); unRestore(); sharedSession.dispose() })
+  const restoreOnReturn = () => { if (!appConfig.useMock) void retrySessionSync() }
+  window.addEventListener('online', restoreOnReturn)
+  window.addEventListener('focus', restoreOnReturn)
+  onUnmounted(() => {
+    window.removeEventListener('online', restoreOnReturn); window.removeEventListener('focus', restoreOnReturn)
+    unSession(); unRestore(); sharedSession.dispose()
+  })
   wsStore.connect()
 
   // 晚进页时回放 WS 已缓存的 DEVICE，避免信号灯/光机图标全灰
@@ -3290,7 +3329,7 @@ const anyDialogOpen = computed(
           </div>
 
           <div class="form-footer">
-            <button class="btn-reset" @click="onReset">重置</button>
+            <button class="btn-reset" :disabled="resetBusy" @click="onReset">{{ resetBusy ? '重置中…' : '重置' }}</button>
             <button
               class="btn-confirm"
               :disabled="aiSilentBusy"

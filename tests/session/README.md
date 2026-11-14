@@ -26,6 +26,10 @@ fixture只监听127.0.0.1:5198，使用临时SQLite/图片目录，提供模拟�
 
 历史自动回填专项：仅启动上述前端Vite，运行 `node tests/session/plate-history.cjs`。浏览器拦截REST和Socket.IO，覆盖扫码通知/共享快照的两种顺序、只收到快照、刷新恢复、已有人工字段不覆盖、同车牌跨检测会话的迟到响应隔离；不启动后端、不访问数据库或设备。
 
+同步与重置恢复专项：仅启动上述前端Vite，运行 `node tests/session/recovery.cjs`。全部REST及Socket.IO由浏览器模拟，覆盖409自动采用最新版本并保留本机输入、短暂断线自动续传、漏推送5秒补查、正常实时更新、确认框期间切单拦截、重置成功但响应丢失、重复点击、重置后快照暂时读取失败、真实失败保留当前内容。重置请求不会自动重发，不访问现场数据库或设备。
+
+同步服务单测：`node --test tests/session/sync.test.ts`。另覆盖多端照片追加/删除合并、上传时继续输入、旧会话迟到响应隔离、有界冲突重试及页面关闭后的定时器清理。正常通过WebSocket即时同步，断线/冲突自动恢复，联网恢复及返回页面时补查；5秒轮询用于补齐漏推送。同字段待上传输入保留，多端照片以原始列表为基准合并。
+
 LAZ手动刷新专项：后端改为启动 `tests/geometry_refresh_browser_server.py`，运行 `node tests/session/geometry-refresh.cjs`。使用临时SQLite、模拟中间件HTTP返回真实压缩LAZ，验证生产刷新API、解码、共享持久化及页面刷新后恢复，失败时保留点云；同时检查主页和登录页统一名称。设备命令全部拦截，不访问现场。
 
 默认使用本机Chrome及Codex运行时Playwright，可通过 `CHROME_PATH`、`PLAYWRIGHT_MODULE` 指定绝对路径。模拟测试不代替现场跑车、真实Pad相机权限及硬件采集验收。
