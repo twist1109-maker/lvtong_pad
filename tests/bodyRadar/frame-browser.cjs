@@ -15,7 +15,7 @@ import Panel from '/src/components/BodyPointCloudPanel.vue';
 const frame=ref({url:'',source:''});
 window.setFrame=async (url,source=url)=>{frame.value={url,source};await nextTick()};
 window.crops=[];window.captureErrors=[];
-createApp({setup:()=>()=>h('div',{style:'width:900px;height:300px;display:flex;flex-direction:column;overflow:hidden'},[h(Panel,{imageUrl:frame.value.url,sourceTempUrl:frame.value.source,view:'body',captureMode:true,onCrop:p=>window.crops.push(p),onCaptureError:e=>window.captureErrors.push(e)})])}).mount('#app');
+createApp({setup:()=>()=>h('div',{id:'frame-host',style:'width:900px;height:300px;display:flex;flex-direction:column;overflow:hidden'},[h(Panel,{imageUrl:frame.value.url,sourceTempUrl:frame.value.source,view:'body',captureMode:true,onCrop:p=>window.crops.push(p),onCaptureError:e=>window.captureErrors.push(e)})])}).mount('#app');
 window.probeReady=true;`;
   const server = await createServer({ root, configFile: false, resolve: { alias: { '@': root + '/src' } },
     plugins: [vue(), { name: 'isolated-frame-test', resolveId(id) { if (id === '/__frame_test.ts') return id }, load(id) { if (id === '/__frame_test.ts') return source }, configureServer(s) { s.middlewares.use((req, res, next) => { if (req.url !== '/diagnostic') return next(); res.setHeader('Content-Type', 'text/html'); res.end('<html><body><div id="app"></div><script type="module" src="/__frame_test.ts"></script></body></html>') }) } }],
@@ -79,8 +79,16 @@ window.probeReady=true;`;
     await page.evaluate(() => window.setFrame('/frame-slow-stale.png'));
     await page.waitForTimeout(80); await page.evaluate(() => window.setFrame(''));
     await page.waitForTimeout(600); assert.equal(await page.locator('.body-image').count(), 0);
+    // 生产ScreenScaler会整体transform；屏幕像素不能写回布局CSS尺寸。
+    await page.evaluate(() => { const host = document.querySelector('#frame-host'); host.style.transform = 'scale(0.5)'; host.style.transformOrigin = 'left top'; return window.setFrame('/frame-scaled.png', '/original-scaled') });
+    await waitFrame('/frame-scaled.png'); await page.waitForTimeout(180);
+    const scaledBox = await page.locator('.fit').boundingBox();
+    await page.mouse.move(scaledBox.x + scaledBox.width * .2, scaledBox.y + scaledBox.height * .2); await page.mouse.down();
+    await page.mouse.move(scaledBox.x + scaledBox.width * .5, scaledBox.y + scaledBox.height * .6, { steps: 4 }); await page.mouse.up();
+    const scaledCrop = await page.evaluate(() => { const { fallbackImage, ...p } = window.crops[1]; return p });
+    assert.deepEqual(scaledCrop, { x1: 320, y1: 80, x2: 800, y2: 240, sourceTempUrl: '/original-scaled', displayWidth: 1600, displayHeight: 400 });
     assert.deepEqual(errors, []);
-    const report = { initial, duringLoading, wide, sampledFrames: samples.length, noOversizeFrames: true, selection: crop, lateFrameCannotReviveClearedPanel: true, errors };
+    const report = { initial, duringLoading, wide, sampledFrames: samples.length, noOversizeFrames: true, selection: crop, scaledSelection: scaledCrop, lateFrameCannotReviveClearedPanel: true, errors };
     fs.writeFileSync(out + '/report.json', JSON.stringify(report, null, 2)); console.log(JSON.stringify(report));
   } finally { await browser.close(); await server.close() }
 })().catch(e => { console.error(e); process.exit(1) });

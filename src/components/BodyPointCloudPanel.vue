@@ -436,9 +436,12 @@ function onPointerDown(e: PointerEvent) {
   // 过渡中开始框选时固定当前可见尺寸，整次手势使用同一帧及坐标系。
   const fit = fitRef.value
   if (fit) {
-    const rect = fit.getBoundingClientRect()
-    fit.style.width = `${rect.width}px`
-    fit.style.height = `${rect.height}px`
+    // 页面可能整体transform缩放；冻结必须使用布局CSS尺寸，不能写回屏幕像素。
+    const style = getComputedStyle(fit)
+    const width = style.width
+    const height = style.height
+    fit.style.width = width
+    fit.style.height = height
   }
 
   if (canMeasure.value && isNearLine(e.clientX)) {
