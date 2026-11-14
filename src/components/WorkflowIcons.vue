@@ -72,7 +72,7 @@ const items = computed<WorkflowItem[]>(() => [
   },
   { key: 'xray', label: '光机', icon: xrayIcon.value },
   { key: 'camera', label: '拍照', icon: '/assets/img/a_xj_offline.png' },
-  { key: 'audit', label: '提示', icon: '/assets/img/a_sh.png' },
+  { key: 'audit', label: '广播', icon: '/assets/img/a_sh.png' },
 ])
 
 const leadSpacerPct = `${(START_POS_X / SCENE_WIDTH) * 100}%`

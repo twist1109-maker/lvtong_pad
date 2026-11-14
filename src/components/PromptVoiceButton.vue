@@ -97,17 +97,17 @@ onUnmounted(() => {
 
 <template>
   <div class="prompt-control">
-    <button ref="trigger" type="button" class="prompt-trigger" aria-label="提示"
+    <button ref="trigger" type="button" class="prompt-trigger" aria-label="广播"
       :aria-pressed="active" :aria-busy="busy" :disabled="busy"
-      :title="active ? '正在循环播报，点击停止' : '选择语音提示'" @click="onTrigger">
-      <img src="/assets/img/a_sh.png" alt="提示" :class="{ 'prompt-blink': active }" />
-      <span :class="{ active }">提示</span>
+      :title="active ? '正在循环播报，点击停止' : '选择广播语音'" @click="onTrigger">
+      <img src="/assets/img/a_sh.png" alt="广播" :class="{ 'prompt-blink': active }" />
+      <span :class="{ active }">广播</span>
     </button>
     <Teleport to="body">
       <div v-if="visible" class="prompt-mask" @click.self="closeList">
-        <section class="prompt-dialog" role="dialog" aria-modal="true" aria-label="语音提示">
-          <header><strong>语音提示</strong><button ref="closeButton" type="button" aria-label="关闭语音列表" @click="closeList">×</button></header>
-          <p>选择后循环播报，每轮间隔 2 秒。再次点击底部“提示”停止。</p>
+        <section class="prompt-dialog" role="dialog" aria-modal="true" aria-label="广播语音">
+          <header><strong>广播语音</strong><button ref="closeButton" type="button" aria-label="关闭语音列表" @click="closeList">×</button></header>
+          <p>选择后循环播报，每轮间隔 2 秒。再次点击底部“广播”停止。</p>
           <button v-for="option in options" :key="option.step" class="prompt-option" type="button"
             :disabled="busy || active" @click="control('start', option.step)">
             <span class="prompt-number">{{ option.step }}</span><span>{{ option.text }}</span>
