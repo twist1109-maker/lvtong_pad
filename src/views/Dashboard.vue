@@ -72,6 +72,8 @@ const syncMessage = ref('正在恢复当前检测…')
 const syncError = ref(false)
 let applyingSharedDraft = false
 const radarCloudImageUrl = ref('')
+const radarCloudTopImageUrl = ref('')
+const radarCloudSideImageUrl = ref('')
 let sharedGeometryUrl = ''
 
 const showHistory = ref(false)
@@ -1868,6 +1870,8 @@ function doReset() {
   bodyProjectionError.value = ''
   bodyCloudGeometry.value = null
   radarCloudImageUrl.value = ''
+  radarCloudTopImageUrl.value = ''
+  radarCloudSideImageUrl.value = ''
   sharedGeometryUrl = ''
   bodyRadarCapture.value = null
   bodyRadarRefreshQueued = false
@@ -1977,6 +1981,8 @@ function buildSubmitPreview(): InspectionDetail {
     body_image_path: toApiUrl(bodyImageUrls.value.body || '') || undefined,
     appointment_radar_image_path: toApiUrl(bookingStore.radarHeadImageUrl || '') || undefined,
     radar_3d_image_path: toApiUrl(radarCloudImageUrl.value) || undefined,
+    radar_3d_top_image_path: toApiUrl(radarCloudTopImageUrl.value) || undefined,
+    radar_3d_side_image_path: toApiUrl(radarCloudSideImageUrl.value) || undefined,
     transparent_image_path:
       toApiUrl(xrayDisplayUrl.value || xrayImageUrls.value['200'] || '') || undefined,
     goods_image_path: goodsJoined || undefined,
@@ -2120,6 +2126,8 @@ async function onSubmitConfirmYes(payload?: {
     top_image_path: toStoragePath(resolveTopImageRef()),
     appointment_radar_image_path: toStoragePath(bookingStore.radarHeadImageUrl || ''),
     radar_3d_image_path: toStoragePath(radarCloudImageUrl.value),
+    radar_3d_top_image_path: toStoragePath(radarCloudTopImageUrl.value),
+    radar_3d_side_image_path: toStoragePath(radarCloudSideImageUrl.value),
     inspection_session_id: getInspectionSessionId() || undefined,
     transparent_image_path: toStoragePath(xrayImageUrls.value['200'] || ''),
     // 通行码 QR 图（对齐 Qt m_codeImagePath，flask 后端生成）
@@ -2225,6 +2233,8 @@ function readSharedDraft(): Draft {
     licensePaths: licensePaths.value, passcode: passcode.value, submitRemark: submitRemark.value,
     previousSelection: previousSelection.value, radarHeadImageUrl: bookingStore.radarHeadImageUrl,
     radarCloudImageUrl: radarCloudImageUrl.value,
+    radarCloudTopImageUrl: radarCloudTopImageUrl.value,
+    radarCloudSideImageUrl: radarCloudSideImageUrl.value,
     cropGoodsImages: [...cropGoodsImages], evidenceSourceKeys: [...evidenceSourceKeys],
     bookingDraft: bookingStore.sharedDialogDraft,
     submissionDraft: submissionDraft.value,
@@ -2244,6 +2254,9 @@ async function loadSharedGeometry(snapshot: SessionSnapshot, force = false) {
     if (getInspectionSessionId() !== sid || sharedGeometryUrl !== url || generation !== bodyProjectionGeneration) return
     if (!data.geometry) throw new Error('共享点云数据无效')
     bodyCloudGeometry.value = data.geometry
+    // 兼容升级前已持久化的检测：从同帧点云缓存恢复新视图，不重新拉取设备。
+    radarCloudTopImageUrl.value = data.views?.top?.imageUrl || ''
+    radarCloudSideImageUrl.value = data.views?.side?.imageUrl || ''
     bodyProjectionError.value = ''
   } catch (e) {
     if (getInspectionSessionId() === sid && sharedGeometryUrl === url && generation === bodyProjectionGeneration) {
@@ -2286,6 +2299,8 @@ const sharedSession = new InspectionSessionSync({
     if (snapshot.phase === 'booking' && !bookingStore.dialogVisible) bookingStore.openDialog()
     if ('radarHeadImageUrl' in draft) bookingStore.radarHeadImageUrl = String(draft.radarHeadImageUrl || '')
     if ('radarCloudImageUrl' in draft) radarCloudImageUrl.value = String(draft.radarCloudImageUrl || '')
+    if ('radarCloudTopImageUrl' in draft) radarCloudTopImageUrl.value = String(draft.radarCloudTopImageUrl || '')
+    if ('radarCloudSideImageUrl' in draft) radarCloudSideImageUrl.value = String(draft.radarCloudSideImageUrl || '')
     if (Array.isArray(draft.cropGoodsImages)) { cropGoodsImages.clear(); draft.cropGoodsImages.forEach(v => cropGoodsImages.add(String(v))) }
     if (Array.isArray(draft.evidenceSourceKeys)) { evidenceSourceKeys.clear(); draft.evidenceSourceKeys.forEach(v => evidenceSourceKeys.add(String(v))) }
     const state = snapshot.workflow

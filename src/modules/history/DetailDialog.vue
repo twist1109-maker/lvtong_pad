@@ -273,12 +273,19 @@ const galleryItems = computed((): GalleryItem[] => {
   push('车身图像', r.body_image_path)
   push('预约雷达图', r.appointment_radar_image_path)
   push('3D雷达图', r.radar_3d_image_path)
+  push('点云顶部图', r.radar_3d_top_image_path)
+  push('点云侧面图', r.radar_3d_side_image_path)
   splitImagePaths(r.goods_image_path).forEach((p, i) => push(`货物照片${i + 1}`, p))
   push('通行码', r.pass_code_image_path)
   return items
 })
 
 const galleryVisible = ref(false)
+const cloudViews = computed(() => [
+  { label: '当前视角', path: record.value?.radar_3d_image_path },
+  { label: '顶部', path: record.value?.radar_3d_top_image_path },
+  { label: '侧面', path: record.value?.radar_3d_side_image_path },
+].filter(view => normalizeGallerySrc(view.path)))
 const galleryStartIndex = ref(0)
 
 /** 归一成可展示 URL；绝对磁盘路径也转成可访问地址 */
@@ -733,6 +740,11 @@ onMounted(async () => {
           </div>
         </div>
 
+        <div v-if="cloudViews.length" class="cloud-view-links" aria-label="点云图片">
+          <span>点云图：</span>
+          <button v-for="view in cloudViews" :key="view.label" type="button" @click="openGalleryAt(view.path)">{{ view.label }}</button>
+        </div>
+
         <!-- 信息表单：外层绿色边框 -->
         <div class="form-box">
           <div class="form-grid">
@@ -1068,6 +1080,16 @@ onMounted(async () => {
   font-weight: bold;
   color: #2c3e50;
   padding: 2px 6px 4px;
+}
+
+.cloud-view-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #345a4e;
+  button { border: 1px solid #bdd9cf; border-radius: 4px; padding: 3px 12px; background: #fff; color: inherit; cursor: pointer; }
 }
 
 .photos-top {

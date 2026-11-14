@@ -58,6 +58,10 @@ export interface InspectionDetail {
   appointment_radar_image_path?: string
   /** 点云3D视图截图 */
   radar_3d_image_path?: string
+  /** 同帧点云顶部XY正交投影图 */
+  radar_3d_top_image_path?: string
+  /** 同帧点云侧面XZ正交投影图 */
+  radar_3d_side_image_path?: string
   operator_name?: string
   inspector_phone?: string
   reviewer_name?: string

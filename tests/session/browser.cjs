@@ -77,6 +77,12 @@ fs.mkdirSync(artifacts, { recursive: true });
     await pc.getByRole('button', { name: '是(Yes)', exact: true }).click();
     await pad.waitForFunction(() => !document.querySelectorAll('.panel-left>.panel-card')[1].querySelector('.body-image'));
     await pad.locator('.form-footer .btn-confirm').click();
+    // 固定正交图在两端恢复，预览可直接打开；不依赖当前3D旋转视角。
+    await pad.getByRole('button', { name: '顶部', exact: true }).waitFor();
+    await pad.getByRole('button', { name: '顶部', exact: true }).click();
+    await pad.getByText('点云顶部图', { exact: true }).waitFor();
+    await pad.screenshot({ path: path.join(artifacts, 'cloud-top-preview.png') });
+    await pad.keyboard.press('Escape');
     await pad.locator('.detail-dialog .result-select').selectOption('1');
     await pad.locator('.session-sync-status').filter({ hasText: '已同步' }).waitFor();
     // 使用真实提交预览和提交路径，验证两新图片字段、备注、照片列表均传到后端。
@@ -93,6 +99,17 @@ fs.mkdirSync(artifacts, { recursive: true });
     assert.equal(records.length, 1);
     const record = records[0];
     assert.ok(record.appointment_radar_image_path); assert.ok(record.radar_3d_image_path);
+    assert.ok(record.radar_3d_top_image_path); assert.ok(record.radar_3d_side_image_path);
+    const views = {};
+    for (const key of ['radar_3d_top_image_path', 'radar_3d_side_image_path']) {
+      const relative = record[key].replaceAll('\\', '/').split('/images/')[1];
+      assert.ok(relative);
+      const response = await pc.request.get('http://127.0.0.1:5197/api/images/' + relative);
+      assert.equal(response.status(), 200);
+      views[key] = await response.body();
+      assert.equal(views[key].subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    }
+    assert.notDeepEqual(views.radar_3d_top_image_path, views.radar_3d_side_image_path);
     assert.ok(record.license_image_path);
     assert.equal(record.history_record, 'PC与Pad同步验收');
     assert.equal(record.goods_image_path.split('|').length, 3);
@@ -106,6 +123,6 @@ fs.mkdirSync(artifacts, { recursive: true });
     assert.ok((await pad.locator('.booking-dialog').innerText()).includes('4.00米'));
     assert.deepEqual(bookingActions, []);
     assert.deepEqual(errors, []);
-    console.log('PASS 匿名WS→真实登录→重新认证并持续同步、PC→Pad恢复、照片追加、证据选择、3D恢复、透视删除同步、查验选择同步、两新图提交、备注保存、双端重置、预约草稿无重复动作、检测中预约零请求；pageerrors=0');
+    console.log('PASS 匿名WS→真实登录→重新认证并持续同步、PC→Pad恢复、照片追加、证据选择、3D恢复、顶部预览、三张点云图提交且顶部/侧面有效PNG并不同、透视删除同步、查验选择同步、备注保存、双端重置、预约草稿无重复动作、检测中预约零请求；pageerrors=0');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
