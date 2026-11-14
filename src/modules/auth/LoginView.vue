@@ -64,7 +64,7 @@ async function handleLogin() {
     <aside class="login-brand">
       <div class="brand-content">
         <div class="brand-heading">
-          <h1 class="brand-title">硚孝高速王母湖收费站绿通快检系统</h1>
+          <h1 class="brand-title">高速公路绿通智能快检系统</h1>
           <p class="brand-subtitle">X透视成像 · AI大数据模型 · 创新查验机制</p>
         </div>
         <ul class="brand-features">
@@ -87,7 +87,7 @@ async function handleLogin() {
       <div class="form-wrapper">
         <div class="form-header">
           <img class="form-logo" src="/assets/img/logo.png" alt="logo" />
-          <h1 class="form-system-title">硚孝高速王母湖收费站绿通快检系统</h1>
+          <h1 class="form-system-title">高速公路绿通智能快检系统</h1>
         </div>
 
         <h2 class="form-title">欢迎登录</h2>

@@ -193,10 +193,10 @@ export function controlGateApi(action: 'open' | 'close' | 'toggle') {
   })
 }
 
-/** 本轮真实 LAZ 缓存；读取不会开启设备或额外拉取中间件。 */
+/** 本轮真实LAZ状态；只有手动刷新会补读中间件，始终不重启设备。 */
 export interface BodyRadarCaptureStatus {
   generation: number
-  state: 'idle' | 'armed' | 'capturing' | 'polling' | 'finished' | 'timeout' | 'stopped'
+  state: 'idle' | 'armed' | 'capturing' | 'polling' | 'finished' | 'ready' | 'timeout' | 'stopped'
   frame: number
   error: string
   hasData: boolean
@@ -211,12 +211,12 @@ export interface BodyRadarProjectionResult {
   geometry?: import('@/modules/bodyRadar/cloudGeometry').CloudGeometryPayload
   views?: Record<'top' | 'side', { imageUrl: string; metersPerPixel: number; coordinateAxes: string }>
 }
-export function fetchBodyRadarImageApi(view: 'top' | 'side') {
+export function fetchBodyRadarImageApi(view: 'top' | 'side', refresh = false) {
   return request<BodyRadarProjectionResult>(
     '/device/body-radar-image',
     {
       method: 'POST',
-      body: JSON.stringify({ view }),
+      body: JSON.stringify({ view, refresh }),
       timeout: 45000,
     },
   )

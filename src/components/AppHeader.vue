@@ -136,7 +136,7 @@ const tools = computed(() => {
 <template>
   <header class="app-header">
     <img class="logo" src="/assets/img/logo.png" alt="logo" />
-    <h1 class="title">硚孝高速王母湖收费站绿通快检系统</h1>
+    <h1 class="title">高速公路绿通智能快检系统</h1>
 
     <div class="toolbar-frame">
       <button class="tool-btn stop-btn" title="急停" @click="emit('toolClick', 'stop')">

@@ -366,6 +366,7 @@ const bodyRadarStatusText = computed(() => {
     case 'capturing': return '几何采集已开启，等待车辆驶入'
     case 'polling': return capture.hasData ? '正在采集三维点云' : '正在采集，等待有效点云'
     case 'finished': return capture.hasData ? '点云采集完成' : '采集已结束，暂无有效点云'
+    case 'ready': return '点云已读取'
     case 'timeout': return '点云采集等待超时'
     default: return '等待车辆几何采集'
   }
@@ -412,10 +413,22 @@ let bodyRadarLoadedFrame = -1
 async function ensureBodyRadarImage(refresh = false) {
   if (!appConfig.useMock) {
     if (!syncReady.value) return
+    if (refresh && (bodyRadarFetching.value.top || bodyRadarFetching.value.side)) return
+    const sid = getInspectionSessionId(), generation = bodyProjectionGeneration
+    if (refresh) {
+      bodyRadarFetching.value = { top: true, side: true }
+      bodyProjectionError.value = ''
+    }
     try {
+      if (refresh) await fetchBodyRadarImageApi('top', true)
+      if (getInspectionSessionId() !== sid || generation !== bodyProjectionGeneration) return
       await sharedSession.restore()
       if (sharedSession.snapshot) await loadSharedGeometry(sharedSession.snapshot, refresh)
-    } catch (e) { bodyProjectionError.value = e instanceof Error ? e.message : '点云恢复失败' }
+    } catch (e) {
+      if (getInspectionSessionId() === sid && generation === bodyProjectionGeneration) bodyProjectionError.value = e instanceof Error ? e.message : '点云恢复失败'
+    } finally {
+      if (refresh && getInspectionSessionId() === sid && generation === bodyProjectionGeneration) bodyRadarFetching.value = { top: false, side: false }
+    }
     return
   }
   if (!refresh && bodyCloudGeometry.value) return
