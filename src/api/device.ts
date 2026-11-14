@@ -1,5 +1,12 @@
 import { request } from './request'
 
+/** 照片从相机主码流读取，独立于浏览器子码流预览。 */
+export function captureCameraApi(deviceId: string) {
+  return request<{ dataUrl: string; deviceId: string; streamType: number; size: number }>(
+    `/capture/camera/${encodeURIComponent(deviceId)}`, { method: 'POST', timeout: 60000 },
+  )
+}
+
 /** 海康 Web 预览登录配置（来自 devices 表） */
 export interface DevicePreviewConfig {
   deviceId: string

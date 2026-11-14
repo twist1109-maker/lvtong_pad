@@ -1703,17 +1703,16 @@ function onBookingReject() {
   bookingStore.setBtnPrebookPending(false)
 }
 
-/** WS 来车/按键预约 → 空闲才弹窗；检测中只提示 */
+/** 硬件按键保留待受理反馈，空闲才弹窗；页面点击另行提示。 */
 function handleBookingComing(msg: { data?: unknown }) {
   const data = (msg.data ?? {}) as BookingComingPayload
   const action = data.action
   if (action === 'busy') {
-    alert('当前处于检测流程中，请提交或重置后再预约')
     return
   }
   if (action === 'book_button') {
     bookingStore.setBtnPrebookPending(true)
-    if (data.openDialog === false) return
+    if (data.openDialog === false || bookingStore.isDetection || bookingStore.checkStep > 0 || workflow.value.checkStep > 0) return
     openBookingDialog()
     return
   }

@@ -8,7 +8,7 @@ fs.mkdirSync(artifacts, { recursive: true });
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true, args: ['--enable-webgl', '--enable-unsafe-swiftshader'] });
   try {
-    const errors = [], bookingActions = [], padConnections = [];
+    const errors = [], bookingActions = [], padConnections = [], dialogs = [];
     const pcCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const padCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (Linux; Android 13; Tablet) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36' });
     const pc = await pcCtx.newPage(), pad = await padCtx.newPage();
@@ -19,7 +19,7 @@ fs.mkdirSync(artifacts, { recursive: true });
       p.on('pageerror', e => errors.push(e.message));
       p.on('request', r => { if (/\/api\/booking\/(open|accept|btn-press)$/.test(r.url())) bookingActions.push(r.url()); });
       await p.route('**/mtx/**', r => r.fulfill({ status: 503, body: 'isolated camera' }));
-      p.on('dialog', d => d.accept());
+      p.on('dialog', d => { dialogs.push(d.message()); return d.accept(); });
     }
     const url = 'http://127.0.0.1:5197/tests/session/';
     await pc.goto(url); await pc.locator('.session-restore-mask').waitFor({ state: 'hidden' });
@@ -41,6 +41,13 @@ fs.mkdirSync(artifacts, { recursive: true });
     assert.equal(await pad.getByPlaceholder('请输入11位手机号').inputValue(), '13812345678');
     assert.equal(await pad.getByPlaceholder('出口称重（kg）').inputValue(), '1234');
     await pc.getByTitle('检测进行中，请提交或重置后再预约', { exact: true }).click();
+    assert.deepEqual(dialogs, ['当前处于检测流程中，请提交或重置后再预约']);
+    dialogs.length = 0;
+    for (const includeOpenDialog of [true, false]) {
+      await pc.request.post('http://127.0.0.1:5198/fixture/hardware-booking', { data: { includeOpenDialog } });
+      await pc.waitForTimeout(150);
+      assert.deepEqual(dialogs, [], '硬件预约反馈不能弹页面点击专用提示');
+    }
     assert.deepEqual(bookingActions, []);
     assert.equal(await pc.getByRole('dialog', { name: '预约处理' }).count(), 0);
     // Pad新增一张本地照片，生产草稿接口负责落盘和实时同步。

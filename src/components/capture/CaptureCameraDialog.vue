@@ -10,6 +10,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   HIK_DISABLED_CAMERAS,
   HIK_ENABLED_CAMERAS,
+  resolveCameraDeviceId,
 } from '@/config/hikvision'
 import { resolveCaptureWhepUrl } from '@/config/liveVideo'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
@@ -18,6 +19,7 @@ import {
   controlPtzApi,
   controlPtzPresetApi,
   announceCaptureVoiceApi,
+  captureCameraApi,
   type PtzDirection,
 } from '@/api/device'
 
@@ -90,6 +92,8 @@ async function announceCaptureVoice(step: 6 | 7 | 8) {
 const useWhepPreview = computed(() => activeCamera.value !== DEVICE_CAMERA)
 const switchingCamera = ref(false)
 let previewSelectionVersion = 0
+let captureBlockedVersion = 0
+watch(() => props.captureBlocked, () => { captureBlockedVersion++ }, { flush: 'sync' })
 
 const photos = ref<string[]>([])
 const selectedIndex = ref(0)
@@ -250,6 +254,7 @@ function syncKind() {
 }
 
 watch(() => props.kind, async () => {
+  previewSelectionVersion++
   stopActivePtz()
   syncKind()
   await applyPreviewForCamera(activeCamera.value)
@@ -463,21 +468,6 @@ function pushPhoto(url: string) {
   }
 }
 
-function captureFromWhepVideo(): string {
-  const video = whepVideoRef.value
-  if (!video || !video.videoWidth || !video.videoHeight) {
-    throw new Error('画面未就绪')
-  }
-  const canvas = document.createElement('canvas')
-  const left = activeCamera.value === '车顶相机' ? Math.floor(video.videoWidth / 3) : 0
-  canvas.width = video.videoWidth - left
-  canvas.height = video.videoHeight
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('无法截帧')
-  ctx.drawImage(video, left, 0, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height)
-  return canvas.toDataURL('image/jpeg', 0.92)
-}
-
 async function onCaptureClick() {
   if (capturing.value || closing.value) return
   if (!useWhepPreview.value) { localCameraRef.value?.open(true); return }
@@ -485,14 +475,22 @@ async function onCaptureClick() {
   if (isMulti.value && photos.value.length >= maxCount.value!) return
   capturing.value = true
   captureError.value = ''
+  const selection = previewSelectionVersion
+  const blockedVersion = captureBlockedVersion
   try {
-    if (whepStatus.value === 'playing') {
-      pushPhoto(captureFromWhepVideo())
-    } else {
-      captureError.value = '相机画面未就绪，请等待连接或切换到本地相机'
+    const response = await captureCameraApi(resolveCameraDeviceId(activeCamera.value))
+    if (closing.value || selection !== previewSelectionVersion) return
+    if (props.captureBlocked || blockedVersion !== captureBlockedVersion) {
+      throw new Error('采集期间车道状态已变化，已丢弃本次照片，请重新拍照')
     }
+    if (response.code !== 0 || !response.data?.dataUrl?.startsWith('data:image/jpeg;base64,')) {
+      throw new Error(response.message || '主码流拍照失败，请重试')
+    }
+    pushPhoto(response.data.dataUrl)
   } catch (cause) {
-    captureError.value = cause instanceof Error ? cause.message : '拍照失败，请重试'
+    if (!closing.value && selection === previewSelectionVersion) {
+      captureError.value = cause instanceof Error ? cause.message : '拍照失败，请重试'
+    }
   } finally {
     capturing.value = false
   }
