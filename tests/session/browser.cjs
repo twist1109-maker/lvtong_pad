@@ -65,11 +65,34 @@ fs.mkdirSync(artifacts, { recursive: true });
     // 车身框选→右侧预览→勾选追加货物，原照片不能被覆盖。
     const body = pc.locator('.panel-left>.panel-card').first();
     await body.locator('.body-image').waitFor();
+    await body.locator('.body-image').evaluate(i => i.decode());
+    assert.equal(await body.locator('.body-image').evaluate(i => i.naturalWidth), 1600);
+    assert.ok((await body.locator('.body-image').getAttribute('src')).includes('/panel-images/preview/'));
     const box = await body.locator('.body-image').boundingBox(); assert.ok(box);
     await pc.mouse.move(box.x + box.width * .2, box.y + box.height * .25);
     await pc.mouse.down(); await pc.mouse.move(box.x + box.width * .55, box.y + box.height * .75, { steps: 8 }); await pc.mouse.up();
+    await pc.getByTitle('追加到货物照', { exact: true }).waitFor();
+    const cropSize = await pc.locator('.video-crop-preview').evaluate(async i => { await i.decode(); return [i.naturalWidth, i.naturalHeight] });
+    assert.ok(Math.abs(cropSize[0] - 1400) <= 6 && Math.abs(cropSize[1] - 500) <= 6, '右侧必须使用原始4000×1000图的局部，不能截取缩略图');
     await pc.getByTitle('追加到货物照', { exact: true }).click();
     await pad.waitForFunction(() => document.querySelectorAll('.capture-btn[title="货物"] img').length === 3);
+    // 透视可显示色阶结果，但右侧框图必须取同帧原始像素。
+    const xray = pc.locator('.panel-left>.panel-card').nth(1);
+    await xray.locator('.body-image').waitFor();
+    await xray.locator('.body-image').evaluate(i => i.decode());
+    assert.ok((await xray.locator('.body-image').getAttribute('src')).startsWith('data:image/jpeg;'));
+    const xb = await xray.locator('.body-image').boundingBox();
+    await pc.mouse.move(xb.x + xb.width * .2, xb.y + xb.height * .25); await pc.mouse.down();
+    await pc.mouse.move(xb.x + xb.width * .55, xb.y + xb.height * .75, { steps: 8 }); await pc.mouse.up();
+    await pc.getByTitle('追加到货物照', { exact: true }).waitFor();
+    const xrayCrop = await pc.locator('.video-crop-preview').evaluate(async i => {
+      await i.decode(); const c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight;
+      const ctx = c.getContext('2d'); ctx.drawImage(i, 0, 0);
+      return { size: [c.width, c.height], pixel: [...ctx.getImageData(c.width - 1, c.height - 1, 1, 1).data] };
+    });
+    assert.ok(Math.abs(xrayCrop.size[0] - 1400) <= 6 && Math.abs(xrayCrop.size[1] - 500) <= 6);
+    assert.deepEqual(xrayCrop.pixel, [220, 220, 220, 255], '局部使用原始像素，不使用透视色阶缩略图');
+    await pc.getByTitle('删除框图', { exact: true }).click();
     await pad.locator('.capture-btn[title="证据照"]').click();
     const picker = pad.getByRole('dialog', { name: '选择证据照' });
     await picker.locator('input[type=checkbox]:enabled').first().check();

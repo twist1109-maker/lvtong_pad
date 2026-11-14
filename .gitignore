@@ -24,3 +24,5 @@ tests/session/artifacts/
 *.njsproj
 *.sln
 *.sw?
+
+tests/bodyRadar/artifacts/

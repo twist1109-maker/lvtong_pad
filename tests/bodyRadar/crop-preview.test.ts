@@ -1,8 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveCropPreview, type CropBoxPayload } from '../../src/utils/cropPreview.ts'
+import { panelPreviewUrl } from '../../src/utils/panelPreview.ts'
 
 const payload: CropBoxPayload = { x1: 0, y1: 0, x2: 100, y2: 50, sourceTempUrl: '/api/temp-images/source', fallbackImage: 'data:image/png;base64,displayed' }
+
+test('shared panel displays a thumbnail but keeps the canonical original reference', () => {
+  const name = 'a'.repeat(64) + '.png'
+  assert.equal(panelPreviewUrl('/api/images/session_assets/' + name), '/api/panel-images/preview/' + name)
+  for (const url of ['', '/api/temp-images/123', '/api/images/body.jpg', 'data:image/png;base64,pixels']) assert.equal(panelPreviewUrl(url), url)
+})
+
+test('shared thumbnail crop must read original and cannot silently use low resolution fallback', async () => {
+  const shared = { ...payload, sourceTempUrl: '/api/images/session_assets/' + 'a'.repeat(64) + '.png', displayWidth: 1600, displayHeight: 400 }
+  assert.equal(await resolveCropPreview(shared, async () => '/crop', async () => 'data:image/png;base64,original'), 'data:image/png;base64,original')
+  await assert.rejects(resolveCropPreview(shared, async () => { throw new Error('missing original') }), /missing original/)
+  await assert.rejects(resolveCropPreview(shared, async () => '/crop', async () => { throw new Error('404') }), /404/)
+})
 
 test('original crop is materialized before preview so subsequent cache expiry cannot lose evidence', async () => {
   const preview = await resolveCropPreview(payload, async () => '/api/temp-images/crop', async url => {

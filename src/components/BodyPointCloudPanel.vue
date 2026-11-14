@@ -63,6 +63,16 @@ const stageRef = ref<HTMLElement | null>(null)
 const fitRef = ref<HTMLElement | null>(null)
 const imgRef = ref<HTMLImageElement | null>(null)
 
+// 显示帧与原图引用一起提交，加载下一帧时始终保留当前帧。
+const displayedUrl = ref('')
+const displayedSource = ref('')
+const fitted = ref(false)
+type FrameRequest = { url: string; source: string; view: BodyPcView }
+type DecodedFrame = FrameRequest & { image: HTMLImageElement }
+let generation = 0
+let loadingImage: HTMLImageElement | null = null
+let latestRequest: FrameRequest | null = null
+let pendingFrame: DecodedFrame | null = null
 const imgW = ref(0)
 const imgH = ref(0)
 const ready = computed(() => imgW.value > 0 && imgH.value > 0)
@@ -276,40 +286,76 @@ function resetState() {
   updateMeasure()
 }
 
-function onImgLoad() {
-  const img = imgRef.value
-  if (!img) return
-  imgW.value = img.naturalWidth
-  imgH.value = img.naturalHeight
+function commitFrame(frame: DecodedFrame) {
+  if (drawingBox.value || draggingLine.value) {
+    pendingFrame = frame
+    return
+  }
+  pendingFrame = null
+  displayedUrl.value = frame.url
+  displayedSource.value = frame.source
+  imgW.value = frame.image.naturalWidth
+  imgH.value = frame.image.naturalHeight
   clearBoxes()
+  index.value = null
+  updateMeasure()
   nextTick(() => {
     updateFitSize()
     bindFitResize()
   })
-
-  if (!canMeasure.value) {
-    index.value = null
-    updateMeasure()
-    return
-  }
-
-  // 延后扫描，先让 <img> 上屏，避免与小车重绘抢主线程
+  if (!canMeasure.value) return
+  const currentGeneration = generation
   window.setTimeout(() => {
-    if (imgRef.value !== img) return
+    if (currentGeneration !== generation || displayedUrl.value !== frame.url) return
     try {
-      index.value = buildPointCloudIndex(img)
+      index.value = buildPointCloudIndex(frame.image)
     } catch (err) {
       console.error('[BodyPointCloudPanel] 点云扫描失败', err)
       index.value = null
     }
-
-    if (index.value) {
-      linePosition.value = (index.value.headX + index.value.tailX) / 2 / imgW.value
-    } else {
-      linePosition.value = 0.5
-    }
+    linePosition.value = index.value ? (index.value.headX + index.value.tailX) / 2 / imgW.value : 0.5
     updateMeasure()
   }, 0)
+}
+
+function flushPendingFrame() {
+  if (pendingFrame && !drawingBox.value && !draggingLine.value) {
+    const frame = pendingFrame
+    pendingFrame = null
+    commitFrame(frame)
+  } else {
+    updateFitSize()
+  }
+}
+
+async function loadNextFrame() {
+  if (loadingImage || !latestRequest) return
+  const frame = latestRequest
+  latestRequest = null
+  const currentGeneration = generation
+  const image = new Image()
+  loadingImage = image
+  image.src = frame.url
+  try {
+    await image.decode()
+    if (currentGeneration === generation && image.naturalWidth > 0) commitFrame({ ...frame, image })
+  } catch {
+    if (currentGeneration === generation && !latestRequest) emit('captureError', '影像加载失败，已保留上一帧')
+  } finally {
+    if (loadingImage === image) loadingImage = null
+    if (currentGeneration === generation) void loadNextFrame()
+  }
+}
+
+function clearFrame() {
+  generation++
+  if (loadingImage) loadingImage.src = ''
+  loadingImage = null
+  latestRequest = null
+  pendingFrame = null
+  fitted.value = false
+  displayedUrl.value = displayedSource.value = ''
+  resetState()
 }
 
 function clientToNatural(clientX: number, clientY: number) {
@@ -336,12 +382,12 @@ function isNearLine(clientX: number) {
   return Math.abs(clientX - rect.left - lineX) <= HIT_PX
 }
 
-async function emitCrop(box: Box) {
-  const sourceTempUrl = (props.sourceTempUrl || props.imageUrl || '').trim()
+function emitCrop(box: Box) {
+  const sourceTempUrl = displayedSource.value
   try {
     if (!imgRef.value) throw new Error('图片尚未加载，无法截图')
     const fallbackImage = cropLoadedImage(imgRef.value, box)
-    emit('crop', { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, sourceTempUrl, fallbackImage })
+    emit('crop', { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, sourceTempUrl, displayWidth: imgW.value, displayHeight: imgH.value, fallbackImage })
   } catch (error) {
     emit('captureError', error instanceof Error ? error.message : '截图失败，请重新框选')
   }
@@ -351,7 +397,7 @@ async function emitCrop(box: Box) {
 function updateFitSize() {
   const stage = stageRef.value
   const fit = fitRef.value
-  if (!stage || !fit || imgW.value <= 0 || imgH.value <= 0) return
+  if (!stage || !fit || imgW.value <= 0 || imgH.value <= 0 || drawingBox.value || draggingLine.value) return
   const sw = stage.clientWidth
   const sh = stage.clientHeight
   if (sw <= 0 || sh <= 0) return
@@ -360,6 +406,10 @@ function updateFitSize() {
   const h = Math.max(1, Math.floor(imgH.value * scale))
   fit.style.width = `${w}px`
   fit.style.height = `${h}px`
+  if (!fitted.value) {
+    fit.getBoundingClientRect() // 首帧直接适应窗口，后续尺寸变化才做短过渡。
+    fitted.value = true
+  }
 }
 
 let fitResizeObserver: ResizeObserver | null = null
@@ -374,7 +424,7 @@ function bindFitResize() {
 }
 
 function onPointerDown(e: PointerEvent) {
-  if (!props.imageUrl || imgW.value <= 0) return
+  if (!displayedUrl.value || imgW.value <= 0) return
   if (e.button !== 0) return
 
   const target = e.target as HTMLElement
@@ -382,6 +432,14 @@ function onPointerDown(e: PointerEvent) {
 
   const stage = stageRef.value
   if (!stage) return
+
+  // 过渡中开始框选时固定当前可见尺寸，整次手势使用同一帧及坐标系。
+  const fit = fitRef.value
+  if (fit) {
+    const rect = fit.getBoundingClientRect()
+    fit.style.width = `${rect.width}px`
+    fit.style.height = `${rect.height}px`
+  }
 
   if (canMeasure.value && isNearLine(e.clientX)) {
     draggingLine.value = true
@@ -413,7 +471,7 @@ function onPointerMove(e: PointerEvent) {
   updateMeasure()
 }
 
-async function onPointerUp(e: PointerEvent) {
+function onPointerUp(e: PointerEvent) {
   const stage = stageRef.value
   if (drawingBox.value && draftStart.value && draftEnd.value) {
     drawingBox.value = false
@@ -430,8 +488,9 @@ async function onPointerUp(e: PointerEvent) {
       const box: Box = { id, ...r, label: currentMeasureLabel() }
       boxes.value.push(box)
       selectedBoxId.value = id
-      await emitCrop(box)
+      emitCrop(box)
     }
+    flushPendingFrame()
     return
   }
 
@@ -442,12 +501,14 @@ async function onPointerUp(e: PointerEvent) {
   } catch {
     /* ignore */
   }
+  flushPendingFrame()
 }
 
 function onPointerCancel(e: PointerEvent) {
   drawingBox.value = draggingLine.value = false
   draftStart.value = draftEnd.value = null
   if (stageRef.value?.hasPointerCapture(e.pointerId)) stageRef.value.releasePointerCapture(e.pointerId)
+  flushPendingFrame()
 }
 
 function onSelectBox(id: number, e: PointerEvent) {
@@ -460,22 +521,17 @@ watch(() => props.metersPerPixel, updateMeasure)
 watch(() => props.captureMode, () => {
   drawingBox.value = false
   draftStart.value = draftEnd.value = null
+  flushPendingFrame()
 })
 watch(
-  () => [props.imageUrl, props.view] as const,
-  async () => {
-    resetState()
-    await nextTick()
-    if (imgRef.value?.complete && imgRef.value.naturalWidth > 0) {
-      onImgLoad()
-    } else {
-      const fit = fitRef.value
-      if (fit) {
-        fit.style.width = ''
-        fit.style.height = ''
-      }
-    }
+  () => [props.imageUrl, props.sourceTempUrl, props.view] as const,
+  ([url, source, view], previous) => {
+    if (!url) { clearFrame(); return }
+    if (previous && previous[2] !== view) clearFrame()
+    latestRequest = { url, source: (source || url).trim(), view }
+    void loadNextFrame()
   },
+  { immediate: true },
 )
 
 onMounted(() => {
@@ -485,11 +541,11 @@ onMounted(() => {
 onUnmounted(() => {
   fitResizeObserver?.disconnect()
   fitResizeObserver = null
-  resetState()
+  clearFrame()
 })
 
 defineExpose({
-  clearBoxes,
+  clearBoxes: () => { clearBoxes(); flushPendingFrame() },
   ready,
   getPreviewImage: () => {
     const image = imgRef.value
@@ -501,8 +557,8 @@ defineExpose({
 </script>
 
 <template>
-  <div class="body-pc" :class="{ interactive: !!imageUrl }">
-    <template v-if="!imageUrl">
+  <div class="body-pc" :class="{ interactive: !!displayedUrl, 'has-fit': fitted }">
+    <template v-if="!displayedUrl">
       <span class="body-pc-placeholder" :class="placeholderToneClass">
         {{ placeholder ?? '车身影像' }}
       </span>
@@ -522,7 +578,7 @@ defineExpose({
       @pointercancel="onPointerCancel"
     >
       <div ref="fitRef" class="fit">
-        <img ref="imgRef" :src="imageUrl" class="body-image" alt="" draggable="false" @load="onImgLoad" @error="resetState(); emit('captureError', '影像加载失败，请刷新后重试')" />
+        <img ref="imgRef" :src="displayedUrl" class="body-image" alt="" draggable="false" />
 
         <template v-if="canMeasure">
           <div class="vline" :style="{ left: `${linePosition * 100}%` }">
@@ -613,8 +669,8 @@ defineExpose({
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   overflow: hidden;
   touch-action: none;
   user-select: none;
@@ -629,10 +685,16 @@ defineExpose({
 }
 
 .fit {
+  width: 1px;
+  height: 1px;
   position: relative;
   line-height: 0;
   flex-shrink: 0;
 }
+
+.has-fit .fit { transition: width 140ms linear, height 140ms linear; }
+
+.is-drawing-box .fit, .is-dragging .fit { transition: none; }
 
 .body-image {
   display: block;

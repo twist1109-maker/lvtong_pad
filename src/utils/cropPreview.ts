@@ -4,6 +4,8 @@ export type CropBoxPayload = {
   x2: number
   y2: number
   sourceTempUrl: string
+  displayWidth?: number
+  displayHeight?: number
   /** 松开鼠标时从已加载图像裁出，独立于服务端临时缓存。 */
   fallbackImage: string
 }
@@ -42,6 +44,12 @@ export async function resolveCropPreview(
   requestOriginal: () => Promise<string>,
   materialize = readImage,
 ): Promise<string> {
+  if (payload.sourceTempUrl.startsWith('/api/images/session_assets/')) {
+    // 共享面板现在展示缩略图，不能把缩略裁块冒充原始分辨率。
+    const original = await materialize(await requestOriginal())
+    if (!original.startsWith('data:image/')) throw new Error('原图裁切失败，请重试')
+    return original
+  }
   if (payload.sourceTempUrl.startsWith('/api/temp-images/')) {
     try {
       const image = await materialize(await requestOriginal())

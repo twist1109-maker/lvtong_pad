@@ -58,6 +58,7 @@ import type {
 import { useRouter } from 'vue-router'
 import { toApiUrl, toStoragePath, joinImagePaths } from '@/utils/imagePath'
 import { processImage } from '@/utils/imageProcess'
+import { panelPreviewUrl } from '@/utils/panelPreview'
 import { resolveCropPreview, type CropBoxPayload } from '@/utils/cropPreview'
 import { plateColorStyle } from '@/utils/licensePlate'
 import { useWhepPlayer } from '@/composables/useWhepPlayer'
@@ -229,6 +230,7 @@ const xrayOpenMenu = ref<XrayOpenMenu>(null)
 const xrayRenderOn = ref(false)
 /** 色阶/伪彩处理后的显示 URL */
 const xrayDisplayUrl = ref('')
+const xrayDisplaySource = ref('')
 let xrayApplyTimer: number | undefined
 let xrayApplySeq = 0
 
@@ -269,15 +271,31 @@ function onXrayDocClick(ev: MouseEvent) {
   xrayOpenMenu.value = null
 }
 
+let xrayApplyRunning = false
+let xrayApplyQueued = false
 async function applyXrayProcess() {
-  const src = transparentImageUrl.value
+  if (xrayApplyRunning) { xrayApplyQueued = true; return }
+  xrayApplyRunning = true
+  try { await processNextXrayFrame() }
+  finally {
+    xrayApplyRunning = false
+    if (xrayApplyQueued) {
+      xrayApplyQueued = false
+      void applyXrayProcess()
+    }
+  }
+}
+
+async function processNextXrayFrame() {
+  const original = transparentImageUrl.value
+  const src = panelPreviewUrl(original)
+  const seq = xrayApplySeq
   if (!src) {
     xrayDisplayUrl.value = ''
+    xrayDisplaySource.value = ''
     return
   }
-  // 先立刻上原图，色阶放到空闲时再算，避免堵小车动画 / 右侧抓拍缩略图
-  xrayDisplayUrl.value = src
-  const seq = ++xrayApplySeq
+  // 保留上一帧，只有色阶计算完成才一次性交付新帧和原图引用。
   await new Promise<void>((resolve) => {
     const ric = (window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
@@ -298,24 +316,33 @@ async function applyXrayProcess() {
     })
     if (seq !== xrayApplySeq) return
     xrayDisplayUrl.value = url
+    xrayDisplaySource.value = original
   } catch (e) {
     if (seq !== xrayApplySeq) return
     console.error('[透视影像] 处理失败', e)
-    xrayDisplayUrl.value = src
+    // 有已显示帧时保留它，避免失败帧触发闪回或错配原图。
+    if (!xrayDisplayUrl.value) {
+      xrayDisplayUrl.value = src
+      xrayDisplaySource.value = original
+    }
   }
 }
 
 function scheduleXrayApply() {
-  window.clearTimeout(xrayApplyTimer)
+  if (xrayApplyTimer) return
   xrayApplyTimer = window.setTimeout(() => {
+    xrayApplyTimer = 0
     void applyXrayProcess()
   }, 120)
 }
 
 function resetXrayProcessState() {
   window.clearTimeout(xrayApplyTimer)
+  xrayApplyTimer = 0
+  xrayApplyQueued = false
   xrayApplySeq++
   xrayDisplayUrl.value = ''
+  xrayDisplaySource.value = ''
   gammaKey.value = 'mid'
   whiteKey.value = 'mid'
   xrayRenderOn.value = false
@@ -531,7 +558,12 @@ function onTransDelClick() {
 function onTransDelYes() {
   showTransDelConfirm.value = false
   xrayImageUrls.value = { '200': '', '160': '', mosaic: '' }
+  window.clearTimeout(xrayApplyTimer)
+  xrayApplyTimer = 0
+  xrayApplyQueued = false
+  xrayApplySeq++
   xrayDisplayUrl.value = ''
+  xrayDisplaySource.value = ''
   xrayBoxPanelRef.value?.clearBoxes()
 }
 
@@ -1094,10 +1126,14 @@ function openImagePreview(kind: 'body' | 'xray') {
 let cropReqSeq = 0
 
 async function requestOriginalCrop(payload: CropBoxPayload): Promise<string> {
-  const res = await request<{ url: string }>('/temp-images/crop', {
+  const shared = payload.sourceTempUrl.startsWith('/api/images/session_assets/')
+  const res = await request<{ url: string }>(shared ? '/panel-images/crop' : '/temp-images/crop', {
     method: 'POST',
     body: JSON.stringify({
       previewUrl: payload.sourceTempUrl,
+      sourceUrl: payload.sourceTempUrl,
+      displayWidth: payload.displayWidth,
+      displayHeight: payload.displayHeight,
       x1: payload.x1,
       y1: payload.y1,
       x2: payload.x2,
@@ -1139,8 +1175,8 @@ async function onXrayBoxCrop(payload: CropBoxPayload) {
   liveCropPreviewUrl.value = ''
   bodyCaptureError.value = ''
   try {
-    // 透视截图保留当前灰场/亮场/伪彩，不能用未经处理的原图替换。
-    const url = await resolveCropPreview({ ...payload, sourceTempUrl: '' }, () => requestOriginalCrop(payload))
+    // 面板可调色阶，右侧局部按所见帧定位后从原始图裁切。
+    const url = await resolveCropPreview(payload, () => requestOriginalCrop(payload))
     if (seq !== cropReqSeq) return
     liveCropPreviewUrl.value = url
   } catch (e) {
@@ -2925,6 +2961,8 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', onXrayDocClick)
   window.clearTimeout(xrayApplyTimer)
+  xrayApplyQueued = false
+  xrayApplySeq++
   if (gateStatusTimer) {
     clearInterval(gateStatusTimer)
     gateStatusTimer = null
@@ -3006,7 +3044,7 @@ const anyDialogOpen = computed(
             ref="bodyPcPanelRef"
             :placeholder="bodyPlaceholderText"
             :placeholder-tone="bodyPlaceholderTone"
-            :image-url="bodyImageUrl || undefined"
+            :image-url="panelPreviewUrl(bodyImageUrl) || undefined"
             :source-temp-url="bodyImageUrl || undefined"
             :view="bodyView"
             :capture-mode="true"
@@ -3073,7 +3111,7 @@ const anyDialogOpen = computed(
             ref="xrayBoxPanelRef"
             placeholder="透视影像"
             :image-url="xrayDisplayUrl || undefined"
-            :source-temp-url="transparentImageUrl || undefined"
+            :source-temp-url="xrayDisplaySource || undefined"
             view="body"
             :capture-mode="true"
             @crop="onXrayBoxCrop"
