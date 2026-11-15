@@ -12,12 +12,14 @@ const props = defineProps<{
   darkness?: number
   alwaysShowLine?: boolean
   manualScale?: boolean
+  pending?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:linePosition': [value: number]
   loaded: []
   error: []
+  manual: []
 }>()
 
 const dragging = ref(false)
@@ -45,7 +47,7 @@ onMounted(() => {
 onUnmounted(() => observer?.disconnect())
 
 const linePercent = computed(() => `${props.linePosition * 100}%`)
-const showLine = computed(() => props.alwaysShowLine || !!props.imageUrl)
+const showLine = computed(() => !props.pending && (props.alwaysShowLine || !!props.imageUrl))
 const maskOpacity = computed(() => (props.darkness ?? 0) / 255)
 
 function clampPosition(clientX: number) {
@@ -121,10 +123,14 @@ function onImageError() {
       @load="onImageLoad"
       @error="onImageError"
     />
-    <span v-if="manualScale" class="radar-placeholder">无雷达图，可拖动红线估算车头长度</span>
+    <div v-if="pending" class="radar-placeholder radar-loading" role="status">
+      <span>正在加载雷达图…</span>
+      <button type="button" @click.stop="emit('manual')">使用参考刻度</button>
+    </div>
+    <span v-else-if="manualScale" class="radar-placeholder">无雷达图，可拖动红线估算车头长度</span>
     <span v-else-if="!imageUrl" class="radar-placeholder">雷达测量来车信息区域</span>
 
-    <div v-if="manualScale" class="manual-ruler" aria-label="车头长度参考刻度，单位米">
+    <div v-if="manualScale && !pending" class="manual-ruler" aria-label="车头长度参考刻度，单位米">
       <span v-for="meter in MANUAL_SCALE_METERS + 1" :key="meter" class="ruler-tick" :style="{ left: `${(meter - 1) / MANUAL_SCALE_METERS * 100}%` }">
         <span>{{ meter - 1 }}m</span>
       </span>
@@ -202,6 +208,12 @@ function onImageError() {
   height: 100%;
   background: #000;
   pointer-events: none;
+}
+
+.radar-loading {
+  flex-direction: column;
+  gap: 14px;
+  button { pointer-events: auto; border: 1px solid #9abfb2; border-radius: 4px; padding: 7px 14px; background: #f3faf6; color: #357762; font: inherit; cursor: pointer; }
 }
 
 .manual-ruler {

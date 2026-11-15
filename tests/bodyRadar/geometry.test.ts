@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { decodeCloudGeometry, type CloudGeometryPayload } from '../../src/modules/bodyRadar/cloudGeometry.ts'
+import { cloudVehicleSize, decodeCloudGeometry, type CloudGeometryPayload } from '../../src/modules/bodyRadar/cloudGeometry.ts'
 
 function sample(): CloudGeometryPayload {
   const bytes = new Uint8Array(24)
@@ -24,4 +24,23 @@ test('truncated payload, nonfinite coordinates and invalid bounds fail before We
   assert.throws(() => decodeCloudGeometry(invalid), /范围/)
   const nan = sample(); const bytes = Buffer.from(nan.positions, 'base64'); bytes.writeFloatLE(NaN, 0); nan.positions = bytes.toString('base64')
   assert.throws(() => decodeCloudGeometry(nan), /无效坐标/)
+})
+
+test('form size uses full point-cloud bounds and limits only the recorded width', () => {
+  for (const [width, expected] of [[2.5, '2.50'], [2.54, '2.54'], [2.549, '2.54'], [2.55, '2.54'], [3.2, '2.54']]) {
+    const data = sample()
+    data.boundsMeters = { min: [0, 0, 0], max: [12.345, Number(width), 3.678] }
+    // dimensionsMeters是冗余字段，尺寸仍与3D视图使用的全点包络同源。
+    const before = structuredClone(data)
+    assert.equal(cloudVehicleSize(data), `长12.35m|宽${expected}m|高3.68m`)
+    assert.deepEqual(data, before, '不能修改原始点云或原始测量值')
+  }
+})
+
+test('missing, degenerate, reversed and nonfinite bounds do not fill a fabricated size', () => {
+  assert.equal(cloudVehicleSize(null), '')
+  for (const max of [[4, 0, 1], [4, -1, 1], [4, NaN, 1], [4, Infinity, 1], [4, 2]]) {
+    const data = sample(); data.boundsMeters = { min: [0, 0, 0], max }
+    assert.equal(cloudVehicleSize(data), '')
+  }
 })

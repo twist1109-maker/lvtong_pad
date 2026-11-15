@@ -12,7 +12,7 @@ import { useDeviceSwitchFeedback } from '@/composables/useDeviceSwitchFeedback'
 import AppHeader from '@/components/AppHeader.vue'
 import type { ToolAnchor } from '@/components/AppHeader.vue'
 import BodyPointCloudPanel from '@/components/BodyPointCloudPanel.vue'
-import type { CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
+import { cloudVehicleSize, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
 const BodyCloud3DPanel = defineAsyncComponent(() => import('@/components/BodyCloud3DPanel.vue'))
 import PreviewButton from '@/components/PreviewButton.vue'
 import ImageGalleryDialog, { type GalleryItem } from '@/components/common/ImageGalleryDialog.vue'
@@ -36,6 +36,7 @@ import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
 import CarSizeDialog from '@/components/CarSizeDialog.vue'
 import DeviceStatusPanel from '@/components/DeviceStatusPanel.vue'
 import PlcControlDialog from '@/components/PlcControlDialog.vue'
+import RadiationDetectionDialog from '@/components/RadiationDetectionDialog.vue'
 import AiStatusDialog from '@/components/AiStatusDialog.vue'
 import UserManager from '@/components/UserManager.vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
@@ -78,6 +79,7 @@ const radarCloudSideImageUrl = ref('')
 let sharedGeometryUrl = ''
 
 const showHistory = ref(false)
+const showRadiationDetection = ref(false)
 /** 左下第四个“拍照”流程图标：周界相机 A 纯视频。 */
 const showSafeCameraDialog = ref(false)
 const showTalkDialog = ref(false)
@@ -589,6 +591,12 @@ const form = ref({
   historyCount: '--',
 })
 
+// 新帧和持久缓存恢复均自动回填，不依赖用户切换到3D视图或WebGL就绪。
+watch(bodyCloudGeometry, geometry => {
+  const size = cloudVehicleSize(geometry)
+  if (size) form.value.size = size
+})
+
 // ---- 农产品选择 ----
 const agriculturalSelectRef = ref<InstanceType<typeof AgriculturalSelect> | null>(null)
 const previousSelection = ref<{ productCode: string; varietyName: string; varietyNamePinYin: string }[]>([])
@@ -960,6 +968,7 @@ async function loadPlateHistory(plate: string, sessionId: string) {
     if (d.vehicle_container_type && isFormBlank(form.value.containerType)) {
       form.value.containerType = d.vehicle_container_type
     }
+    // 点云未到达前保留历史回填；本次最新点云到达后自动覆盖历史尺寸。
     if (d.vehicle_size && isFormBlank(form.value.size)) {
       form.value.size = /长/.test(d.vehicle_size)
         ? d.vehicle_size
@@ -1749,6 +1758,8 @@ function onWorkflowClick(key: WorkflowStepKey) {
     void onGateIconClick()
   } else if (key === 'camera') {
     showSafeCameraDialog.value = true
+  } else if (key === 'xray') {
+    showRadiationDetection.value = true
   }
 }
 
@@ -3463,6 +3474,8 @@ const anyDialogOpen = computed(
       @close="showDeviceStatus = false"
       @status-change="onDevicesStatusChange"
     />
+
+    <RadiationDetectionDialog v-if="showRadiationDetection" @close="showRadiationDetection = false" />
 
     <!-- 开关控制 / PLC设备状态控制 — 对齐 PLCControlDialog -->
     <PlcControlDialog

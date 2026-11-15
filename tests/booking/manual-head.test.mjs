@@ -3,11 +3,12 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { createPinia, setActivePinia } from 'pinia'
-import { effectScope } from 'vue'
+import { effectScope, nextTick } from 'vue'
 
 const server = await createServer({ configFile: false, server: { middlewareMode: true },
   resolve: { alias: { '@': fileURLToPath(new URL('../../src', import.meta.url)) } } })
 const { useBookingDialog } = await server.ssrLoadModule('/src/modules/booking/composables/useBookingDialog.ts')
+const { useBookingStore } = await server.ssrLoadModule('/src/modules/booking/store/useBookingStore.ts')
 test.after(() => server.close())
 const deferred = () => {
   let resolve
@@ -154,5 +155,61 @@ test('没有SX时统一使用后端内容起点，默认红线、拖动与保留
   await d.refreshRadarImage()
   assert.equal(d.carHeadLength.value, 3)
   assert.equal(d.linePosition.value, .4)
+  scope.stop()
+})
+
+test('启动等待标定和图片加载后才显示分割线，仍可主动使用参考尺', async () => {
+  const pending = deferred()
+  const { dialog: d, scope } = fixture({ fetchRadarImage: () => pending.promise })
+  await d.initDialog()
+  assert.equal(d.radarPending.value, true)
+  d.useManualRuler()
+  assert.equal(d.radarPending.value, false)
+  d.setLinePosition(.5)
+  pending.resolve(image)
+  await nextTick(); await nextTick()
+  assert.equal(d.radarPending.value, true)
+  d.onRadarImageLoaded()
+  assert.equal(d.radarPending.value, false)
+  assert.equal(d.carHeadLength.value, 3)
+  assert.equal(d.linePosition.value, .4)
+  scope.stop()
+})
+
+test('恢复草稿已保存图像坐标时不再用默认分割线覆盖，保留人工长度', async () => {
+  const { dialog: first, scope: scope1 } = fixture({ fetchRadarImage: async () => image })
+  const store = useBookingStore()
+  await first.initDialog(); first.onRadarImageLoaded()
+  first.setLinePosition(.43)
+  await nextTick()
+  const saved = JSON.parse(JSON.stringify(store.sharedDialogDraft))
+  scope1.stop()
+  store.sharedDialogDraft = saved
+  const scope2 = effectScope()
+  const second = scope2.run(() => useBookingDialog({ openDialog: () => { throw Error('cannot reopen') } }))
+  await second.initDialog()
+  assert.equal(second.radarPending.value, true)
+  second.onRadarImageLoaded()
+  assert.equal(second.linePosition.value, .43)
+  assert.equal(second.carHeadLength.value, 3.3)
+  await nextTick()
+  assert.equal(store.sharedDialogDraft.linePosition, .43)
+  assert.equal(store.sharedDialogDraft.radarImageReady, true)
+  scope2.stop()
+})
+
+test('旧版自动分割线草稿的图片加载不再跳到0.5', async () => {
+  const { scope: firstScope } = fixture()
+  const store = useBookingStore()
+  store.sharedDialogDraft = { radarImageUrl: '/restored.png', originalImageWidth: 1000,
+    linePosition: .25, carHeadLength: 1.5, metersPerPixel: .01, vehicleSx: 1,
+    lineAdjusted: false }
+  firstScope.stop()
+  const scope = effectScope()
+  const dialog = scope.run(() => useBookingDialog({ openDialog: () => { throw Error('cannot reopen') } }))
+  await dialog.initDialog()
+  dialog.onRadarImageLoaded()
+  assert.equal(dialog.linePosition.value, .25)
+  assert.equal(dialog.carHeadLength.value, 1.5)
   scope.stop()
 })

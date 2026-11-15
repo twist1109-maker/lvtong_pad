@@ -24,6 +24,8 @@ const {
   submitting,
   radarImageUrl,
   manualScale,
+  radarPending,
+  useManualRuler,
   setLinePosition,
   onRadarImageLoaded,
   onRadarImageError,
@@ -87,6 +89,8 @@ async function startBookingVideo() {
 const { talking, busy: talkBusy, hint: talkHint, error: talkError,
   speakerMuted, toggleSpeaker, stop: stopTalk, toggle: toggleTalk } = useBrowserTalk()
 const canToggleTalk = computed(() => !submitting.value)
+const talkLabel = computed(() => talkBusy.value ? '取消连接' : talking.value ? '通话中' : '闭麦')
+const talkTitle = computed(() => talkBusy.value ? '正在连接，点击取消' : talking.value ? '通话中，点击闭麦' : '闭麦，点击开始通话')
 
 /** 媒体加载不限制业务决定；仅正在提交时防止重复操作。 */
 const canAccept = computed(() => !submitting.value)
@@ -161,6 +165,8 @@ onBeforeUnmount(() => {
             @update:line-position="setLinePosition"
             :image-url="radarImageUrl"
             :manual-scale="manualScale"
+            :pending="radarPending"
+            @manual="useManualRuler"
             :darkness="0"
             always-show-line
             @loaded="onRadarImageLoaded"
@@ -203,15 +209,13 @@ onBeforeUnmount(() => {
                 type="button" class="btn-talk"
                 :class="{ on: talking, connecting: talkBusy }"
                 :disabled="!canToggleTalk"
-                :title="talkHint || '开始对讲'"
+                :title="talkTitle"
+                :aria-label="talkLabel"
                 :aria-pressed="talking"
+                :aria-busy="talkBusy"
                 @click="toggleTalk"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-                  <rect x="9" y="2" width="6" height="12" rx="3" />
-                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
-                </svg>
-                <span>{{ talking ? '结束对讲' : talkBusy ? '取消连接' : '开始对讲' }}</span>
+                <img :src="talking ? '/assets/img/a_talkstart.png' : '/assets/img/a_talkstop.png'" alt="" />
               </button>
               <button
                 type="button" class="btn-speaker" :class="{ muted: speakerMuted }"
@@ -341,6 +345,8 @@ onBeforeUnmount(() => {
 .voice-buttons { display: flex; align-items: center; gap: 26px; }
 .btn-talk, .btn-speaker { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border: 0; border-radius: 4px; padding: 6px; background: transparent; color: #6c817b; font: inherit; font-size: 13px; cursor: pointer; }
 .btn-talk svg, .btn-speaker svg { width: 24px; height: 24px; flex-shrink: 0; }
+.btn-talk { width: 44px; height: 44px; padding: 6px; }
+.btn-talk img { width: 32px; height: 32px; object-fit: contain; }
 .btn-talk.on { color: #15825e; background: #e4f3eb; }
 .btn-talk.connecting { color: #99621d; }
 .btn-speaker.muted { color: #b83f32; }

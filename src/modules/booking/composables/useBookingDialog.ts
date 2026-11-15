@@ -33,9 +33,10 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
   const radarRetryAttempt = ref(0)
   const linePosition = ref(MANUAL_HEAD_LENGTH_M / MANUAL_SCALE_METERS)
   const radarImageReady = ref(false)
+  const radarPending = ref(true)
   const manualScale = computed(() => !radarImageReady.value || originalImageWidth.value <= 0)
   let lineAdjusted = false
-  let suggestedLinePosition = 0.5
+  let restoredImageLine: number | null = null
   let requestGeneration = 0
   let sessionGeneration = 0
   onScopeDispose(() => { requestGeneration++; sessionGeneration++ })
@@ -63,6 +64,7 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
     const d = bookingStore.sharedDialogDraft
     if (!d || !Object.keys(d).length) return false
     restoringDraft = true
+    const decodedUrl = radarImageReady.value ? radarImageUrl.value : null
     if (typeof d.linePosition === 'number') linePosition.value = d.linePosition
     if (typeof d.carHeadLength === 'number') carHeadLength.value = d.carHeadLength
     if (typeof d.vehicleHeight === 'number') vehicleHeight.value = d.vehicleHeight
@@ -77,13 +79,18 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
     if (typeof d.contentOriginX === 'number' || d.contentOriginX === null) contentOriginX.value = d.contentOriginX ?? undefined
     lineAdjusted = typeof d.lineAdjusted === 'boolean' ? d.lineAdjusted : true
     vehicleTypeManual.value = typeof d.vehicleTypeManual === 'boolean' ? d.vehicleTypeManual : true
+    // 旧草稿没有ready标记时兼容其已保存的图片坐标；新草稿明确区分参考尺和图像坐标。
+    restoredImageLine = radarImageUrl.value && originalImageWidth.value > 0 && d.radarImageReady !== false
+      ? linePosition.value : null
+    radarImageReady.value = !!decodedUrl && decodedUrl === radarImageUrl.value
+    radarPending.value = !!radarImageUrl.value && !radarImageReady.value
     restoringDraft = false
     return true
   }
   watch(() => bookingStore.sharedDialogDraft, () => { if (dialogInitialized && !restoringDraft) restoreDialogDraft() }, { deep: true, flush: 'sync' })
   watch(() => ({ linePosition: linePosition.value, carHeadLength: carHeadLength.value,
     vehicleHeight: vehicleHeight.value, vehicleType: vehicleType.value, xrayEnabled: xrayEnabled.value,
-    radarImageUrl: radarImageUrl.value || '', imageEnvelope: imageEnvelope.value,
+    radarImageUrl: radarImageUrl.value || '', radarImageReady: radarImageReady.value, imageEnvelope: imageEnvelope.value,
     vehicleHeaderEnvelope: vehicleHeaderEnvelope.value, originalImageWidth: originalImageWidth.value,
     metersPerPixel: metersPerPixel.value, vehicleSx: vehicleSx.value, contentOriginX: contentOriginX.value ?? null,
     lineAdjusted, vehicleTypeManual: vehicleTypeManual.value }), (draft) => {
@@ -92,7 +99,8 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
       bookingStore.sharedDialogDraft = draft
       restoringDraft = false
     }
-  }, { deep: true, flush: 'sync' })
+  // 同一批标定/图像/线位更新完成后只发布完整草稿，避免其他终端回放中间坐标。
+  }, { deep: true, flush: 'post' })
 
   function syncVehicleTypeFromHeight(height: number) {
     if (vehicleTypeManual.value) return
@@ -145,6 +153,7 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
 
   function setLinePosition(position: number) {
     if (submitting.value) return
+    restoredImageLine = null
     lineAdjusted = true
     linePosition.value = Math.min(1, Math.max(manualScale.value ? 0.1 / MANUAL_SCALE_METERS : 0, position))
     updateCarHeadLength()
@@ -153,8 +162,13 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
   function onRadarImageLoaded() {
     const selectedLength = carHeadLength.value
     radarImageReady.value = true
+    radarPending.value = false
     if (manualScale.value) return
-    if (lineAdjusted) {
+    if (restoredImageLine != null) {
+      linePosition.value = restoredImageLine
+      carHeadLength.value = selectedLength
+      restoredImageLine = null
+    } else if (lineAdjusted) {
       const originMeters = vehicleSx.value != null
         ? Math.max(0, vehicleSx.value)
         : (contentOriginX.value ?? (envelopeFirstNumber(vehicleHeaderEnvelope.value) - envelopeFirstNumber(imageEnvelope.value))) * metersPerPixel.value
@@ -164,12 +178,18 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
       linePosition.value = position
       carHeadLength.value = selectedLength
     } else {
-      linePosition.value = suggestedLinePosition
+      const originPx = contentOriginX.value ??
+        (envelopeFirstNumber(vehicleHeaderEnvelope.value) - envelopeFirstNumber(imageEnvelope.value))
+      linePosition.value = (vehicleSx.value != null
+        ? linePositionFromVehicleSx(vehicleSx.value, originalImageWidth.value, metersPerPixel.value, DEFAULT_HEAD_WIDTH)
+        : defaultLinePositionAfterOrigin(originPx, originalImageWidth.value, DEFAULT_HEAD_WIDTH, metersPerPixel.value)) ?? 0.5
       updateCarHeadLength()
     }
   }
 
   function onRadarImageError() {
+    radarPending.value = false
+    restoredImageLine = null
     radarImageReady.value = false
     radarImageUrl.value = null
     originalImageWidth.value = 0
@@ -194,7 +214,9 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
           if (generation !== requestGeneration) return
           if (data?.imageUrl) {
             const alreadyDecoded = radarImageReady.value && radarImageUrl.value === data.imageUrl
+            restoredImageLine = null
             radarImageReady.value = false
+            radarPending.value = !alreadyDecoded
             radarImageUrl.value = data.imageUrl
             imageEnvelope.value = data.imageEnvelope || ''
             vehicleHeaderEnvelope.value = data.vehicleHeaderEnvelope || ''
@@ -228,31 +250,6 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
               `originX=${data.contentOriginX ?? '-'}`,
             )
 
-            const width = data.originalImageWidth || 0
-            // 优先：红线放在车头后 1.5m（Vehicle-SX + 1.5）/ Resolution
-            if (vehicleSx.value != null) {
-              const fromSx = linePositionFromVehicleSx(
-                vehicleSx.value,
-                width,
-                metersPerPixel.value,
-                DEFAULT_HEAD_WIDTH,
-              )
-              if (fromSx != null) {
-                suggestedLinePosition = fromSx
-              }
-            } else {
-              const originPx = contentOriginX.value ??
-                (envelopeFirstNumber(vehicleHeaderEnvelope.value) - envelopeFirstNumber(imageEnvelope.value))
-              const fromOrigin = defaultLinePositionAfterOrigin(
-                originPx,
-                width,
-                DEFAULT_HEAD_WIDTH,
-                metersPerPixel.value,
-              )
-              if (fromOrigin != null) {
-                suggestedLinePosition = fromOrigin
-              }
-            }
             errorMessage.value = ''
             if (alreadyDecoded) onRadarImageLoaded()
             return
@@ -295,7 +292,8 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
     radarImageUrl.value = null
     radarImageReady.value = false
     lineAdjusted = false
-    suggestedLinePosition = 0.5
+    restoredImageLine = null
+    radarPending.value = opts?.fetchRadar !== false
     linePosition.value = MANUAL_HEAD_LENGTH_M / MANUAL_SCALE_METERS
     carHeadLength.value = MANUAL_HEAD_LENGTH_M
     vehicleHeight.value = 3.0
@@ -341,6 +339,10 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
   function toggleVehicleType() {
     vehicleType.value = vehicleType.value === 'big' ? 'small' : 'big'
     vehicleTypeManual.value = true
+  }
+
+  function useManualRuler() {
+    radarPending.value = false
   }
 
   function requestConfirm(kind: keyof typeof CONFIRM_TEXT) {
@@ -411,6 +413,8 @@ export function useBookingDialog(api: BookingPort = getBookingApi()) {
     submitting,
     radarImageUrl,
     manualScale,
+    radarPending,
+    useManualRuler,
     setLinePosition,
     onRadarImageLoaded,
     onRadarImageError,

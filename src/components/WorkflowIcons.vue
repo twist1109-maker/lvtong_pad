@@ -70,7 +70,7 @@ const items = computed<WorkflowItem[]>(() => [
     wide: true,
     title: gateTitle.value,
   },
-  { key: 'xray', label: '光机', icon: xrayIcon.value },
+  { key: 'xray', label: '光机', icon: xrayIcon.value, title: '辐射值检测' },
   { key: 'camera', label: '拍照', icon: '/assets/img/a_xj_offline.png' },
   { key: 'audit', label: '广播', icon: '/assets/img/a_sh.png' },
 ])
@@ -91,6 +91,7 @@ const cellWidthPct = `${(SEGMENT_PIX / SCENE_WIDTH) * 100}%`
         :aria-busy="item.key === 'gate' && gatePending"
         type="button"
         class="wf-btn"
+        :aria-label="item.key === 'xray' ? '光机' : undefined"
         :class="{
           'is-book-pending': item.key === 'book' && bookingPending,
         }"
