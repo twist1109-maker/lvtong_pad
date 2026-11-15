@@ -19,6 +19,7 @@ export interface RadiationState {
   unit: string
   latest: { value: number; receivedAt: number } | null
   sources: boolean[] | null
+  gateLowered: boolean | null
 }
 
 export function getRadiationApi() {
@@ -27,7 +28,7 @@ export function getRadiationApi() {
 
 export function startRadiationApi() {
   return request<RadiationState>('/device/radiation-detection', {
-    method: 'POST', body: JSON.stringify({ action: 'start', confirmed: true }), timeout: 4000,
+    method: 'POST', body: JSON.stringify({ action: 'start' }), timeout: 4000,
   })
 }
 

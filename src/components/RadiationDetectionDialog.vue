@@ -9,7 +9,6 @@ const state = ref<RadiationState | null>(null)
 const busy = ref(false)
 const known = ref(false)
 const error = ref('')
-const confirmed = ref(false)
 const closeRequested = ref(false)
 const dialog = ref<HTMLElement | null>(null)
 const now = ref(Date.now())
@@ -22,6 +21,10 @@ let sampledAt = Date.now()
 let mayHaveStarted = false
 
 const active = computed(() => state.value?.active === true)
+const gateLowered = computed(() => known.value && state.value?.gateLowered === true)
+const gateText = computed(() => !known.value || state.value?.gateLowered == null
+  ? '栏杆机：状态待确认，禁止检测'
+  : state.value.gateLowered ? '栏杆机：已落下（设备反馈）' : '栏杆机：已抬起，请先落杆')
 const measuring = computed(() => state.value?.phase === 'measuring')
 const samples = computed(() => state.value?.samples || [])
 const maximum = computed(() => samples.value.length ? Math.max(...samples.value.map(point => point.value)) : null)
@@ -83,7 +86,7 @@ async function refresh() {
 }
 
 async function control(action: 'start' | 'stop') {
-  if (busy.value || (action === 'start' && (!known.value || active.value || !confirmed.value))) return
+  if (busy.value || (action === 'start' && (!gateLowered.value || active.value))) return
   if (action === 'stop' && !state.value?.runId) return
   busy.value = true
   if (action === 'start') mayHaveStarted = true
@@ -93,7 +96,6 @@ async function control(action: 'start' | 'stop') {
   try {
     const response = action === 'start' ? await startRadiationApi() : await stopRadiationApi(state.value!.runId)
     apply(response.data, requestId)
-    if (action === 'start') confirmed.value = false
   } catch (reason) {
     if (disposed) return
     known.value = false
@@ -190,9 +192,9 @@ onUnmounted(() => {
           </div>
           <p v-if="error || state?.error" role="alert" class="error">{{ error || state?.error }}</p>
           <footer>
-            <label><input v-model="confirmed" type="checkbox" :disabled="active || busy || !known" />已确认现场条件（栏杆机落下）</label>
+            <span class="gate-feedback" :class="{ ready: gateLowered }" role="status"><i aria-hidden="true" />{{ gateText }}</span>
             <button v-if="active" type="button" class="detect stop" :disabled="busy" @click="control('stop')">{{ busy ? '正在停止…' : '停止检测' }}</button>
-            <button v-else type="button" class="detect" :disabled="busy || !known || !confirmed" @click="control('start')">{{ busy ? '正在启动…' : '检 测' }}</button>
+            <button v-else type="button" class="detect" :disabled="busy || !gateLowered" @click="control('start')">{{ busy ? '正在启动…' : '检 测' }}</button>
           </footer>
           <p class="footnote">检测值取 6 秒内最大值；≤15 μSv/h 正常，>15 μSv/h 较高。到时自动停机，双光源关闭确认后结束。</p>
         </div>
@@ -212,8 +214,9 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .reference { stroke-dasharray: 10 8; stroke-width: 2; }.line-0 { stroke: #53636d; }.line-15 { stroke: #69c779; }.line-30 { stroke: #ed5045; }.axis { stroke: #b8c5ca; }.curve { fill: none; stroke: #61be72; stroke-width: 3; stroke-linejoin: round; }.curve-point { fill: #61be72; stroke: white; stroke-width: 2; }.curve.high { stroke: #ed5045; }.curve-point.high { fill: #ed5045; }
 .progress-row { display: flex; align-items: center; gap: 18px; color: #74838c; font-size: 13px; }.progress { height: 5px; background: #eaf0f2; flex: 1; border-radius: 3px; overflow: hidden; i { display: block; height: 100%; background: #099c83; transition: width .2s linear; } }
 .source-feedback { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 20px; font-size: 13px; color: #58717b; .on, .stopping { color: #d96c18; } b { color: #078f77; font-weight: 500; } }
-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 24px; label { display: flex; gap: 8px; align-items: center; font-size: 16px; } input { width: 18px; height: 18px; accent-color: #099c83; } }
+footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 24px; }
+.gate-feedback { display: flex; gap: 8px; align-items: center; font-size: 15px; color: #b76c20; i { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; } &.ready { color: #078f77; } }
 .detect { min-width: 140px; min-height: 52px; border: 0; border-radius: 7px; background: #ed493e; color: white; font-size: 22px; font-weight: 700; cursor: pointer; }.detect:disabled { opacity: .45; cursor: default; }.stop { background: #c53c32; font-size: 18px; }
 .footnote { font-size: 12px; color: #7c8d96; line-height: 1.7; margin: 18px 0 0; }.error { padding: 10px 14px; background: #fff0ed; color: #c53c32; font-size: 14px; line-height: 1.6; border-radius: 4px; }
-@media (max-width: 600px) { .radiation-mask { padding: 8px; }.radiation-dialog { max-height: calc(100dvh - 16px); }header { padding: 14px 16px; }.radiation-content { padding: 20px 14px; }.readings { grid-template-columns: 1fr; gap: 14px; .result, .live { justify-content: flex-start; } strong { font-size: 22px; } }.readings .timestamp b { font-size: 14px; }.radiation-chart { margin-top: 20px; }footer { align-items: stretch; flex-direction: column; gap: 18px; label { font-size: 14px; } }.source-feedback { gap: 8px 18px; } }
+@media (max-width: 600px) { .radiation-mask { padding: 8px; }.radiation-dialog { max-height: calc(100dvh - 16px); }header { padding: 14px 16px; }.radiation-content { padding: 20px 14px; }.readings { grid-template-columns: 1fr; gap: 14px; .result, .live { justify-content: flex-start; } strong { font-size: 22px; } }.readings .timestamp b { font-size: 14px; }.radiation-chart { margin-top: 20px; }footer { align-items: stretch; flex-direction: column; gap: 18px; }.gate-feedback { font-size: 14px; }.source-feedback { gap: 8px 18px; } }
 </style>
