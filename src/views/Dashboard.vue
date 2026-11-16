@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useWsStore } from '@/stores/useWsStore'
 import { request } from '@/api/request'
 import { InspectionSessionSync, materializeDraftImages, type Draft, type SessionSnapshot } from '@/services/inspectionSessionSync'
+import { createInspectionDraftOutbox } from '@/services/inspectionDraftOutbox'
 import { setInspectionSessionId, getInspectionSessionId, getInspectionClientId } from '@/services/inspectionSessionContext'
 import { getCurrentUserApi } from '@/api/auth'
 import { controlGateApi, fetchBodyRadarImageApi, type BodyRadarCaptureStatus } from '@/api/device'
@@ -80,7 +81,7 @@ let sharedGeometryUrl = ''
 
 const showHistory = ref(false)
 const showRadiationDetection = ref(false)
-/** 左下第四个“拍照”流程图标：周界相机 A 纯视频。 */
+/** 左下第四个“周界”图标：左右周界视频。 */
 const showSafeCameraDialog = ref(false)
 const showTalkDialog = ref(false)
 watch(() => bookingStore.dialogVisible, () => { showTalkDialog.value = false })
@@ -1628,7 +1629,7 @@ watch(
   },
 )
 
-/** 任一静默 AI 进行中：禁止点确认，避免提交未裁切/未回填的中间态 */
+/** 任一静默 AI 进行中：暂缓最终提交，避免写入未裁切/未回填的中间态 */
 const aiSilentBusy = computed(
   () =>
     aiLoadRateBusy.value ||
@@ -2127,21 +2128,8 @@ function buildSubmitPreview(): InspectionDetail {
 }
 
 async function onConfirm() {
-  try { await sharedSession.flush() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
   updateRadarCloudScreenshot()
-  /** 对齐 LvTongPro::onConfirmClicked：先弹查验记录预览，再写库 */
-  if (aiSilentBusy.value) {
-    alert(aiSilentBusyHint.value || 'AI 处理中，请稍候再确认')
-    return
-  }
-  if (!form.value.goods) {
-    alert('请选择农产品类型')
-    return
-  }
-  if (weightInputError.value) {
-    alert(weightInputError.value)
-    return
-  }
+  // 主页确认只打开预览；完整性、同步和处理中校验留在最终提交。
   // 打开确认页前刷新登录用户 phone/groupId，保证查验/班组能回显
   try {
     const me = await getCurrentUserApi()
@@ -2170,6 +2158,10 @@ async function onSubmitConfirmYes(payload?: {
   history_record?: string
 }) {
   submitRemark.value = payload?.history_record ?? submitRemark.value
+  if (weightInputError.value) {
+    alert(weightInputError.value)
+    return
+  }
   updateRadarCloudScreenshot()
   try { await sharedSession.flush() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
   showSubmitPreview.value = false
@@ -2372,6 +2364,7 @@ async function loadSharedGeometry(snapshot: SessionSnapshot, force = false) {
   }
 }
 const sharedSession = new InspectionSessionSync({
+  outbox: createInspectionDraftOutbox(auth.user?.username || ''),
   read: readSharedDraft,
   load: async () => (await request<SessionSnapshot>('/inspection-session/current')).data,
   save: async (snapshot, changes) => (await request<SessionSnapshot>('/inspection-session/current', {
@@ -3381,11 +3374,10 @@ const anyDialogOpen = computed(
             <button class="btn-reset" :disabled="resetBusy" @click="onReset">{{ resetBusy ? '重置中…' : '重置' }}</button>
             <button
               class="btn-confirm"
-              :disabled="aiSilentBusy"
-              :title="aiSilentBusy ? aiSilentBusyHint : '确认提交'"
+              title="查看提交确认"
               @click="onConfirm"
             >
-              {{ aiSilentBusy ? 'AI处理中…' : '确认' }}
+              确认
             </button>
           </div>
         </div>
@@ -3408,7 +3400,7 @@ const anyDialogOpen = computed(
       @reject="onBookingReject"
     />
 
-    <!-- 左下“拍照”：周界相机 A，只显示视频，不启用对讲。 -->
+    <!-- 左下“周界”：左右两路视频。 -->
     <SafeCameraDialog
       v-if="showSafeCameraDialog"
       @close="showSafeCameraDialog = false"

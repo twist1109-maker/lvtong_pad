@@ -71,7 +71,7 @@ const items = computed<WorkflowItem[]>(() => [
     title: gateTitle.value,
   },
   { key: 'xray', label: '光机', icon: xrayIcon.value, title: '辐射值检测' },
-  { key: 'camera', label: '拍照', icon: '/assets/img/a_xj_offline.png' },
+  { key: 'camera', label: '周界', icon: '/assets/img/a_xj_offline.png', title: '查看周界左、周界右摄像头' },
   { key: 'audit', label: '广播', icon: '/assets/img/a_sh.png' },
 ])
 

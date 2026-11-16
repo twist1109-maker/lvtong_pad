@@ -22,6 +22,23 @@ body,
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+}
+
+@media (any-pointer: coarse) {
+  body { overscroll-behavior: none; }
+  #app {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input, textarea, [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
+    font-size: max(16px, 1em);
+  }
+  img, video { -webkit-user-drag: none; }
 }
 
 button {

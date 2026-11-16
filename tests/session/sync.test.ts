@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InspectionSessionSync, diffDraft, type Draft, type SessionSnapshot } from '../../src/services/inspectionSessionSync.ts'
+import { InspectionSessionSync, diffDraft, type Draft, type SessionSnapshot, type PendingDraft } from '../../src/services/inspectionSessionSync.ts'
 const snapshot = (revision = 0): SessionSnapshot => ({ sessionId: 'one', revision, phase: 'detecting', booking: { is_detection: true }, workflow: {}, draft: { form: { plate: '鄂A12345' }, captureLists: { goods: ['pc.jpg'], evidence: [] } } })
 
 test('PC snapshot restores on Pad; photos append and normalize to shared URL', async () => {
@@ -59,7 +59,7 @@ test('same-field conflict automatically rebases and saves pending local input', 
   draft.form = { plate: '鄂B12345' }; sync.changed()
   sync.receive({ ...snapshot(1), draft: { form: { plate: '鄂C12345' } } })
   await sync.flush()
-  assert.deepEqual(savedRevisions, [0, 2])
+  assert.deepEqual(savedRevisions, [1, 2])
   assert.equal((draft.form as Draft).plate, '鄂B12345')
   sync.dispose()
 })
@@ -190,4 +190,99 @@ test('failed upload keeps local photos for explicit retry', async () => {
   fail = false; await sync.flush()
   assert.equal(statuses.at(-1), '已同步')
   sync.dispose()
+})
+
+test('live remote updates rebase queued fields before sending, without avoidable conflicts', async t => {
+  let draft: Draft = {}, sent = -1
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d }, load: async () => snapshot(),
+    save: async (s) => { sent = s.revision; return { ...snapshot(3), draft } }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose())
+  await sync.restore(); draft.form = { plate: '人工填写' }; sync.changed()
+  sync.receive({ ...snapshot(2), draft: { form: { plate: '自动识别', phone: '13800000000' } } })
+  await sync.flush()
+  assert.equal(sent, 2)
+  assert.equal((draft.form as Draft).plate, '人工填写')
+  assert.equal((draft.form as Draft).phone, '13800000000')
+})
+
+test('poll during upload and further photos do not resend an uploaded blob or duplicate canonical photo', async t => {
+  let draft: Draft = {}, server = snapshot(), resolve!: (s: SessionSnapshot) => void
+  const batches: unknown[][] = []
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d }, load: async () => server,
+    save: async (_s, changes) => {
+      const list = changes.find(c => c.path.join('.') === 'captureLists.goods')!.value as unknown[]
+      batches.push(list)
+      if (batches.length === 1) return new Promise(r => { resolve = r })
+      return { ...snapshot(2), draft: { captureLists: { goods: list } } }
+    }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose())
+  await sync.restore(); draft.captureLists = { goods: ['pc.jpg', 'blob:first'] }; sync.changed()
+  const saving = sync.flush()
+  await waitFor(() => batches.length === 1)
+  server = { ...snapshot(1), draft: { captureLists: { goods: ['pc.jpg', '/api/images/first.jpg'] } } }
+  sync.receive(server); await sync.restore()
+  draft.captureLists = { goods: [...(draft.captureLists as Draft).goods as string[], 'blob:second'] }; sync.changed()
+  resolve(server); await saving
+  assert.deepEqual(batches[1], ['pc.jpg', '/api/images/first.jpg', 'blob:second'])
+})
+
+test('refresh recovers pending fields and photos, clears outbox only after server acknowledgement', async t => {
+  let stored: PendingDraft | null = null, draft: Draft = {}, server = snapshot()
+  const outbox = { load: async () => stored, save: async (value: PendingDraft | null) => { stored = structuredClone(value) } }
+  const first = new InspectionSessionSync({ outbox, read: () => draft, apply: (_s, d) => { draft = d },
+    load: async () => server, save: async () => { throw new Error('断网') }, status() {}, pollIntervalMs: 0 })
+  await first.restore(); draft.submitRemark = '刷新不丢失'; draft.captureLists = { goods: ['pc.jpg', 'data:image/png;base64,new'] }; first.changed()
+  await assert.rejects(first.flush(), /断网/); first.dispose()
+  assert.equal(stored!.sessionId, 'one')
+  draft = {}
+  const second = new InspectionSessionSync({ outbox, read: () => draft, apply: (_s, d) => { draft = d },
+    load: async () => server, save: async () => (server = { ...snapshot(1), draft: structuredClone(draft) }), status() {}, pollIntervalMs: 0 })
+  t.after(() => second.dispose())
+  await second.restore()
+  assert.equal(draft.submitRemark, '刷新不丢失')
+  assert.deepEqual((draft.captureLists as Draft).goods, ['pc.jpg', 'data:image/png;base64,new'])
+  await second.flush()
+  assert.equal(stored, null)
+})
+
+test('a restored outbox cannot replay edits to a submitted or different vehicle', async t => {
+  for (const current of [{ ...snapshot(5), sessionId: 'next' }, { ...snapshot(5), phase: 'submitted' as const }]) {
+    let draft: Draft = {}, saved = 0, stored: PendingDraft | null = { sessionId: 'one', revision: 0,
+      changes: [{ path: ['submitRemark'], value: '旧车' }], bases: [{ path: ['submitRemark'], value: '' }] }
+    const sync = new InspectionSessionSync({ outbox: { load: async () => stored, save: async value => { stored = value } },
+      read: () => draft, apply: (_s, d) => { draft = d }, load: async () => current,
+      save: async () => { saved++; return current }, status() {}, pollIntervalMs: 0 })
+    t.after(() => sync.dispose())
+    await sync.restore(); await sync.flush()
+    await waitFor(() => stored === null)
+    assert.equal(saved, 0); assert.equal(draft.submitRemark, undefined)
+  }
+})
+
+test('pending outbox writes cannot resurrect acknowledged edits after a slow disk write', async t => {
+  let draft: Draft = {}, stored: PendingDraft | null = null, writes = 0, release!: () => void
+  const sync = new InspectionSessionSync({ outbox: { load: async () => null, save: async value => {
+    if (value && ++writes === 1) await new Promise<void>(r => { release = r })
+    stored = structuredClone(value)
+  } }, read: () => draft, apply: (_s, d) => { draft = d }, load: async () => snapshot(),
+    save: async () => ({ ...snapshot(1), draft: structuredClone(draft) }), status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose())
+  await sync.restore(); draft.submitRemark = 'first'; sync.changed()
+  await waitFor(() => !!release)
+  draft.submitRemark = 'second'; sync.changed()
+  const saving = sync.flush(); release(); await saving
+  assert.equal(draft.submitRemark, 'second'); assert.equal(stored, null)
+})
+
+test('continuous remote broadcasts cannot keep postponing queued field changes', async t => {
+  let draft: Draft = {}, saves = 0
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d }, load: async () => snapshot(),
+    save: async s => { saves++; return { ...snapshot(s.revision + 1), draft: structuredClone(draft) } }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose())
+  await sync.restore(); draft.submitRemark = '连续采集时也能填写'; sync.changed()
+  for (let i = 1; i <= 8; i++) {
+    await new Promise(resolve => setTimeout(resolve, 60))
+    sync.receive({ ...snapshot(i), draft: snapshot().draft })
+  }
+  assert.equal(saves, 1, 'WS broadcasts must not postpone the 350ms save window')
 })

@@ -30,6 +30,10 @@ fixture只监听127.0.0.1:5198，使用临时SQLite/图片目录，提供模拟�
 
 同步服务单测：`node --test tests/session/sync.test.ts`。另覆盖多端照片追加/删除合并、上传时继续输入、旧会话迟到响应隔离、有界冲突重试及页面关闭后的定时器清理。正常通过WebSocket即时同步，断线/冲突自动恢复，联网恢复及返回页面时补查；5秒轮询用于补齐漏推送。同字段待上传输入保留，多端照片以原始列表为基准合并。
 
+2026-11-16 多端并发/刷新专项：启动本文件所述两个隔离服务后运行 `node tests/session/concurrent-refresh.cjs`。使用真实生产草稿接口、字段版本冲突检测、Socket.IO及IndexedDB，覆盖自动采集后人工填表/拍照、PC/Pad同字段真实409、网络上传失败后字段及blob照片刷新恢复、服务器确认后清理暂存、切换车辆隔离。暂存按账号和页签恢复，仅匹配当前检测会话，保留48小时；已确认、已提交或已换车立即清除。暂存失败会提示保持页面打开，网络同步继续尝试。服务单测另覆盖持续WS不能延迟发送、上传期间补查与继续拍照的共享URL衔接、慢落盘不能复活已确认编辑。
+
+预约缓存图/Pad手势专项：额外启动 `node node_modules/vite/bin/vite.js --config tests/booking/preview.config.ts` 后，运行 `node tests/booking/startup-touch.cjs`。人为延后ResizeObserver，检查四种尺寸缓存图片启动及草稿恢复时红线位置不跳；使用Pad触摸模拟检查菜单/选字/原生拖图/页面缩放限制，并验证输入、触摸事件及原生列表滚动可用。真实iPad Safari仍需终端复核。
+
 LAZ手动刷新专项：后端改为启动 `tests/geometry_refresh_browser_server.py`，运行 `node tests/session/geometry-refresh.cjs`。使用临时SQLite、模拟中间件HTTP返回真实压缩LAZ，验证生产刷新API、解码、共享持久化及页面刷新后恢复，失败时保留点云；同时检查主页和登录页统一名称。设备命令全部拦截，不访问现场。
 
 默认使用本机Chrome及Codex运行时Playwright，可通过 `CHROME_PATH`、`PLAYWRIGHT_MODULE` 指定绝对路径。模拟测试不代替现场跑车、真实Pad相机权限及硬件采集验收。

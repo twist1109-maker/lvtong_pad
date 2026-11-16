@@ -936,7 +936,7 @@ onMounted(async () => {
           >
             修改
           </button>
-          <button type="button" class="btn-close" @click="emit('close')">关闭</button>
+          <button v-if="!isSubmitMode" type="button" class="btn-close" @click="emit('close')">关闭</button>
         </div>
       </div>
     </div>

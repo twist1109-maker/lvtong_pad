@@ -19,9 +19,13 @@ export const LANE_WHEP_URL =
 export const ROAD_WHEP_URL =
   (import.meta.env.VITE_ROAD_WHEP_URL as string | undefined)?.trim() || '/mtx/cam6/whep'
 
-/** 左下「拍照」流程图标打开的周界相机 A。 */
+/** 周界左：沿用原周界相机配置。 */
 export const SAFE_CAMERA_WHEP_URL =
   (import.meta.env.VITE_SAFE_CAMERA_WHEP_URL as string | undefined)?.trim() || '/mtx/cam3/whep'
+
+/** 周界右：独立读取 devices.cam_safe_right。 */
+export const SAFE_RIGHT_CAMERA_WHEP_URL =
+  (import.meta.env.VITE_SAFE_RIGHT_CAMERA_WHEP_URL as string | undefined)?.trim() || '/mtx/cam7/whep'
 
 export const TALK_WHEP_URL =
   (import.meta.env.VITE_TALK_WHEP_URL as string | undefined)?.trim() || '/mtx/cam4/whep'

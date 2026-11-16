@@ -27,7 +27,7 @@ for (let x = 90; x < canvas.width - 70; x += 3) {
 const imageUrl = canvas.toDataURL()
 setBookingApi({
   async fetchRadarImage() {
-    await delay(1100)
+    if (!parameters.has('fast')) await delay(1100)
     if (missing.value) return null
     return { imageUrl, originalImageWidth: canvas.width, originalImageHeight: canvas.height,
       imageEnvelope: '0', vehicleHeaderEnvelope: '90', contentOriginX: 90,

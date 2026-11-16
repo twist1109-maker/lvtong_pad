@@ -754,9 +754,7 @@ function openPreview() {
                     >
                       −
                     </button>
-                    <button type="button" class="ptz-talk" disabled title="对讲稍后接入">
-                      <img src="/assets/img/a_talkstart.png" alt="对讲" />
-                    </button>
+                    <span aria-hidden="true" />
                     <button
                       type="button"
                       class="ptz-btn"
@@ -1223,37 +1221,6 @@ function openPreview() {
     border-color: #9ca3af;
     color: #9ca3af;
     cursor: not-allowed;
-  }
-}
-
-/* 对讲图标：落在原「焦距」格 */
-.ptz-talk {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
-  }
-
-  img {
-    width: 55%;
-    max-width: 36px;
-    height: auto;
-    aspect-ratio: 1;
-    object-fit: contain;
-    filter: brightness(0) invert(18%);
   }
 }
 

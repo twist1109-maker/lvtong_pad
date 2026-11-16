@@ -16,6 +16,7 @@ html .screen-scaler-stage {
   .scan-frame { width: 200px; height: 200px; }
   .camera-dialog { width: 800px; }
   .camera-dialog video { height: 500px; }
+  .perimeter-dialog { width: 1440px; }
   .gallery-dialog { width: 1100px; height: 860px; }
   .overlay > .dialog:has(.filter-box) { width: 1440px; height: 900px; }
   .talk-dialog .video-wrap { max-height: 600px; }

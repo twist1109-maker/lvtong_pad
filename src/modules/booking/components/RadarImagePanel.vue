@@ -3,7 +3,7 @@
  * 雷达来车图 + 可拖分界红线 — 对齐 Qt ImageLabelWithLine
  * 面板透明无边框，对话框绿渐变透过
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { MANUAL_SCALE_METERS } from '../utils/bookingMath'
 
 const props = defineProps<{
@@ -28,6 +28,26 @@ const stageRef = ref<HTMLElement | null>(null)
 const naturalSize = ref({ width: 0, height: 0 })
 const panelSize = ref({ width: 0, height: 0 })
 let observer: ResizeObserver | undefined
+const layoutReady = ref(false)
+let layoutFrame = 0
+let layoutGeneration = 0
+
+// 缓存图片的load可能早于ResizeObserver；等图像区域和标定同时就绪再显示红线。
+watch(() => [props.imageUrl, props.manualScale, props.pending, naturalSize.value.width,
+  naturalSize.value.height, panelSize.value.width, panelSize.value.height], async () => {
+  const generation = ++layoutGeneration
+  layoutReady.value = false
+  cancelAnimationFrame(layoutFrame)
+  if (props.pending || !panelSize.value.width || !panelSize.value.height ||
+    (!props.manualScale && (!naturalSize.value.width || !naturalSize.value.height))) return
+  await nextTick()
+  if (generation !== layoutGeneration) return
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = requestAnimationFrame(() => {
+      if (generation === layoutGeneration) layoutReady.value = true
+    })
+  })
+}, { flush: 'sync' })
 
 // 红线坐标以实际图片区域为准；不同点云宽高比下留白不能参与米/像素换算。
 const stageStyle = computed(() => {
@@ -44,10 +64,10 @@ onMounted(() => {
   })
   if (panelRef.value) observer.observe(panelRef.value)
 })
-onUnmounted(() => observer?.disconnect())
+onUnmounted(() => { observer?.disconnect(); layoutGeneration++; cancelAnimationFrame(layoutFrame) })
 
 const linePercent = computed(() => `${props.linePosition * 100}%`)
-const showLine = computed(() => !props.pending && (props.alwaysShowLine || !!props.imageUrl))
+const showLine = computed(() => layoutReady.value && !props.pending && (props.alwaysShowLine || !!props.imageUrl))
 const maskOpacity = computed(() => (props.darkness ?? 0) / 255)
 
 function clampPosition(clientX: number) {
