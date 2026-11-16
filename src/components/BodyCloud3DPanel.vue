@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { decodeCloudGeometry, type CloudGeometryPayload } from '@/modules/bodyRadar/cloudGeometry'
+import { createCloudScreenshot } from '@/modules/bodyRadar/cloudScreenshot'
 
 const props = defineProps<{ geometry?: CloudGeometryPayload | null; loading?: boolean; error?: string }>()
 const host = ref<HTMLDivElement | null>(null)
@@ -162,16 +163,7 @@ function getPreviewImage() {
   canvas.width = renderer.domElement.width; canvas.height = renderer.domElement.height
   const ctx = canvas.getContext('2d')!
   ctx.drawImage(renderer.domElement, 0, 0)
-  const ratio = canvas.width / width
-  ctx.font = `${14 * ratio}px sans-serif`
-  ctx.fillStyle = '#fff'; ctx.fillRect(8 * ratio, 6 * ratio, Math.min(width - 16, 390) * ratio, 28 * ratio)
-  ctx.fillStyle = '#345a4e'
-  ctx.fillText(axisNames.map((name, i) => `${name} ${measured.value[i].toFixed(3)}m`).join('   '), 14 * ratio, 25 * ratio)
-  if (boundsVisible.value) for (const label of labels.value) {
-    ctx.fillStyle = label.color
-    ctx.fillText(label.text, label.x / 100 * canvas.width, label.y / 100 * canvas.height)
-  }
-  return canvas.toDataURL('image/png')
+  return createCloudScreenshot(canvas, measured.value, canvas.width / width)
 }
 onMounted(() => {
   try {
