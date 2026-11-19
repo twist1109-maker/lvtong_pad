@@ -33,6 +33,7 @@ import BookingDialog from '@/modules/booking/BookingDialog.vue'
 import TalkDialog from '@/components/TalkDialog.vue'
 import SafeCameraDialog from '@/components/SafeCameraDialog.vue'
 import AgriculturalSelect from '@/components/AgriculturalSelect.vue'
+import { mergeGoodsRecommendations, type GoodsRecommendation } from '@/utils/goodsRecommendations'
 import LicensePlateEdit from '@/components/LicensePlateEdit.vue'
 import CarSizeDialog from '@/components/CarSizeDialog.vue'
 import DeviceStatusPanel from '@/components/DeviceStatusPanel.vue'
@@ -41,6 +42,7 @@ import RadiationDetectionDialog from '@/components/RadiationDetectionDialog.vue'
 import AiStatusDialog from '@/components/AiStatusDialog.vue'
 import UserManager from '@/components/UserManager.vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
+import AiMark from '@/components/common/AiMark.vue'
 import HistoryDialog from '@/modules/history/HistoryDialog.vue'
 import DetailDialog from '@/modules/history/DetailDialog.vue'
 import type { InspectionDetail } from '@/modules/history'
@@ -592,6 +594,44 @@ const form = ref({
   historyCount: '--',
 })
 
+type AiField = 'plate' | 'truckType' | 'containerType' | 'goods' | 'loadRate' | 'weightRange' | 'license' | 'licenseGc'
+const emptyAiMarks = (): Record<AiField, string> => ({ plate: '', truckType: '', containerType: '', goods: '', loadRate: '', weightRange: '', license: '', licenseGc: '' })
+// 记录AI实际写入的值。人工更改后清除来源，避免改回旧值时误挂AI标记。
+const aiMarks = ref(emptyAiMarks())
+type ManualAiField = 'plate' | 'truckType' | 'containerType' | 'loadRate'
+const manualFields = ref<Partial<Record<ManualAiField, boolean>>>({})
+const aiContext = ref<Record<string, { source: string; plateSource?: string; stitchedSource?: string; inputSource?: string; hangSource?: string; inputHangSource?: string; container?: string; wheelCount?: number; baseRevision?: number; ocrDone?: boolean }>>({})
+let applyingAiField = false
+let aiResultsPaused = false
+function manualField(field: ManualAiField) { manualFields.value[field] = true; aiMarks.value[field] = '' }
+function hasAiMark(field: AiField, value: string) {
+  if ((field === 'truckType' || field === 'containerType') && aiContext.value.truck?.source !== bodyImageUrls.value.body) return false
+  if (field === 'plate' && (aiContext.value.license?.plateSource ?? aiContext.value.license?.source) !== licensePaths.value.license) return false
+  if (field === 'weightRange' && aiContext.value.license?.source !== licensePaths.value.license) return false
+  if (field === 'loadRate' && (aiContext.value.load?.source !== aiLoadRateImage.value || aiContext.value.load?.container !== form.value.containerType)) return false
+  return !!value && aiMarks.value[field] === value
+}
+function canFillAi(field: ManualAiField) {
+  const current = form.value[field]
+  return !aiResultsPaused && !manualFields.value[field] && (!current || current === '--' || aiMarks.value[field] === current)
+}
+function setAiField(field: 'plate' | 'truckType' | 'containerType' | 'loadRate', value: string) {
+  if (!canFillAi(field)) return
+  applyingAiField = true
+  aiMarks.value[field] = value
+  form.value[field] = value
+  applyingAiField = false
+}
+watch([() => form.value.plate, () => form.value.truckType, () => form.value.containerType, () => form.value.goodsProductCode, () => form.value.loadRate], (valuesNow, oldValues) => {
+  if (applyingSharedDraft || applyingAiField) return
+  const fields = ['plate', 'truckType', 'containerType', 'goods', 'loadRate'] as const
+  fields.forEach((key, index) => { if (key !== 'goods' && valuesNow[index] !== oldValues[index]) manualField(key) })
+  const values = { plate: form.value.plate, truckType: form.value.truckType, containerType: form.value.containerType, goods: form.value.goodsProductCode, loadRate: form.value.loadRate }
+  for (const key of Object.keys(values) as (keyof typeof values)[]) {
+    if (aiMarks.value[key] !== values[key]) aiMarks.value[key] = ''
+  }
+}, { flush: 'sync' })
+
 // 新帧和持久缓存恢复均自动回填，不依赖用户切换到3D视图或WebGL就绪。
 watch(bodyCloudGeometry, geometry => {
   const size = cloudVehicleSize(geometry)
@@ -603,6 +643,7 @@ const agriculturalSelectRef = ref<InstanceType<typeof AgriculturalSelect> | null
 const previousSelection = ref<{ productCode: string; varietyName: string; varietyNamePinYin: string }[]>([])
 
 function onSelectProduct() {
+  scheduleAiGoodsReal()
   agriculturalSelectRef.value?.show(previousSelection.value)
 }
 
@@ -617,9 +658,12 @@ function onAgriculturalConfirm(items: { productCode: string; varietyName: string
     form.value.goodsProductCode = ''
     form.value.goodsVarietyPinYin = ''
   }
+  // 全部所选品种均来自当前AI推荐时标记，混入手选品种不把整个字段冒称AI结果。
+  aiMarks.value.goods = items.length && items.every(item => goodsRecommendations.value.some(g => g.code === item.productCode)) ? form.value.goodsProductCode : ''
 }
 
-/** AI 满载率（静默）：透视拼接图 + 货箱类型齐全时自动调用；厢式→方案1，其他→方案2 */
+/** AI满载率：拼接图或200透视图 + 车厢类型，连续出图防抖后计算。 */
+const aiLoadRateImage = computed(() => xrayImageUrls.value.mosaic || xrayImageUrls.value['200'])
 const aiLoadRateBusy = ref(false)
 let aiLoadRateSeq = 0
 let aiLoadRateLastKey = ''
@@ -630,9 +674,10 @@ async function runAiLoadRateSilent(mosaic: string, containerCode: string, contai
   if (aiLoadRateBusy.value && aiLoadRateLastKey === key) return
   aiLoadRateLastKey = key
   const seq = ++aiLoadRateSeq
+  const loadBaseRevision = sharedSession.snapshot?.revision ?? 0
   aiLoadRateBusy.value = true
   try {
-    const imgRes = await fetch(mosaic)
+    const imgRes = await fetchAiImage(mosaic)
     if (!imgRes.ok) throw new Error(`读取拼接图失败: HTTP ${imgRes.status}`)
     const blob = await imgRes.blob()
     const fd = new FormData()
@@ -664,12 +709,13 @@ async function runAiLoadRateSilent(mosaic: string, containerCode: string, contai
       message?: string
       data?: { load_rate_pct?: number; scheme?: string }
     }
-    if (seq !== aiLoadRateSeq) return
+    if (seq !== aiLoadRateSeq || aiResultsPaused) return
     if (!res.ok || json.code !== 0 || json.data?.load_rate_pct == null) {
       console.warn('[AI满载率]', json.message || `HTTP ${res.status}`)
       return
     }
-    form.value.loadRate = String(json.data.load_rate_pct)
+    aiContext.value.load = { source: mosaic, container: containerCode, baseRevision: loadBaseRevision }
+    setAiField('loadRate', String(json.data.load_rate_pct))
     console.info(
       `[AI满载率] ${json.data.load_rate_pct}% (${json.data.scheme === 'scheme1_box' ? '厢式·方案1' : '其他·方案2'})`,
     )
@@ -682,25 +728,29 @@ async function runAiLoadRateSilent(mosaic: string, containerCode: string, contai
 }
 
 function scheduleAiLoadRate() {
-  if (applyingSharedDraft) return
+  if (aiResultsPaused) return
+  aiLoadRateBusy.value = true
   if (aiLoadRateTimer) clearTimeout(aiLoadRateTimer)
   aiLoadRateTimer = setTimeout(() => {
     aiLoadRateTimer = null
-    const mosaic = xrayImageUrls.value.mosaic
+    const mosaic = aiLoadRateImage.value
     const code = form.value.containerType
-    if (!mosaic || !code) return
+    if (!mosaic || !code) { aiLoadRateBusy.value = false; return }
     const container = containerTypeOptions.value.find((t) => t.type_code === code)
     const name = container?.type_name || ''
-    if (!name) return
+    if (!name) { aiLoadRateBusy.value = false; return }
     const key = `${mosaic}||${code}`
-    if (key === aiLoadRateLastKey && form.value.loadRate !== '') return
+    if (key === aiLoadRateLastKey && form.value.loadRate !== '') { aiLoadRateBusy.value = false; return }
     void runAiLoadRateSilent(mosaic, code, name)
-  }, 400)
+  }, 1200)
 }
 
 watch(
-  () => [xrayImageUrls.value.mosaic, form.value.containerType] as const,
+  [() => aiLoadRateImage.value, () => form.value.containerType],
   ([mosaic, code]) => {
+    // 保留旧AI值的归属，供新结果更新；显示标记由图片来源和货箱类型判断。
+    aiLoadRateSeq++
+    aiLoadRateBusy.value = false
     if (!mosaic || !code) {
       aiLoadRateLastKey = ''
       return
@@ -746,16 +796,20 @@ function applyTruckTypeFromLastWheels() {
     form.value.plate,
   )
   // 两轮：可判定则赋值；无法判定则清空（避免沿用错误的一/二型）
-  form.value.truckType = code
+  if (canFillAi('truckType')) {
+    if (aiContext.value.truck) aiContext.value.truck.baseRevision = sharedSession.snapshot?.revision ?? 0
+    setAiField('truckType', code)
+  }
 }
 
 async function runAiTruckRealSilent(bodyUrl: string) {
   if (aiTruckRealBusy.value && aiTruckRealLastKey === bodyUrl) return
   aiTruckRealLastKey = bodyUrl
   const seq = ++aiTruckRealSeq
+  const truckBaseRevision = sharedSession.snapshot?.revision ?? 0
   aiTruckRealBusy.value = true
   try {
-    const imgRes = await fetch(bodyUrl)
+    const imgRes = await fetchAiImage(bodyUrl)
     if (!imgRes.ok) throw new Error(`读取车身图失败: HTTP ${imgRes.status}`)
     const blob = await imgRes.blob()
     const fd = new FormData()
@@ -796,20 +850,21 @@ async function runAiTruckRealSilent(bodyUrl: string) {
         cratetype?: string
       }
     }
-    if (seq !== aiTruckRealSeq) return
+    if (seq !== aiTruckRealSeq || aiResultsPaused) return
     if (!res.ok || json.code !== 0 || !json.data) {
       console.warn('[AI货车识别]', json.message || `HTTP ${res.status}`)
       return
     }
     const d = json.data
     aiTruckRealLastWheel = Number(d.wheel_count) || 0
+    aiContext.value.truck = { source: bodyUrl, wheelCount: aiTruckRealLastWheel, baseRevision: truckBaseRevision }
     // 两轮：可判定才赋值，无法判定保持/清空为空；多轴直接用后端结果
     if (aiTruckRealLastWheel > 0 && aiTruckRealLastWheel <= 2) {
-      form.value.truckType = d.vehicle_type || ''
-    } else if (d.vehicle_type) {
-      form.value.truckType = d.vehicle_type
+      setAiField('truckType', truckTypeFromWheels(aiTruckRealLastWheel, form.value.plateColor, form.value.plate))
+    } else {
+      setAiField('truckType', d.vehicle_type || '')
     }
-    if (d.vehicle_container_type) form.value.containerType = d.vehicle_container_type
+    setAiField('containerType', d.vehicle_container_type || '')
     console.info(
       `[AI货车识别] wheel=${d.wheel_count ?? '-'} plate=${form.value.plate || '-'} ` +
         `color=${form.value.plateColor || '-'} truck=${d.vehicle_type || '(未判定)'} ` +
@@ -824,13 +879,15 @@ async function runAiTruckRealSilent(bodyUrl: string) {
 }
 
 function scheduleAiTruckReal() {
-  if (applyingSharedDraft) return
+  if (aiResultsPaused) return
+  aiTruckRealBusy.value = true
   if (aiTruckRealTimer) clearTimeout(aiTruckRealTimer)
   aiTruckRealTimer = setTimeout(() => {
     aiTruckRealTimer = null
     const bodyUrl = bodyImageUrls.value.body
-    if (!bodyUrl) return
+    if (!bodyUrl) { aiTruckRealBusy.value = false; return }
     if (bodyUrl === aiTruckRealLastKey && form.value.truckType && form.value.containerType) {
+      aiTruckRealBusy.value = false
       return
     }
     void runAiTruckRealSilent(bodyUrl)
@@ -840,6 +897,15 @@ function scheduleAiTruckReal() {
 watch(
   () => bodyImageUrls.value.body,
   (url) => {
+    if (aiContext.value.truck?.source === url) {
+      aiTruckRealLastWheel = aiContext.value.truck.wheelCount || 0
+      aiTruckRealLastKey = url
+      return
+    }
+    // 换图仅隐藏旧来源，不丢失AI值的归属，否则新结果会把旧AI值当成人工值。
+    aiTruckRealSeq++
+    aiTruckRealLastWheel = 0
+    aiTruckRealBusy.value = false
     if (!url) {
       aiTruckRealLastKey = ''
       aiTruckRealLastWheel = 0
@@ -851,7 +917,7 @@ watch(
 
 // 两轮车：车牌号/颜色变更时按蓝牌/渐变绿重算一/二型（无法判定则不赋值）
 watch(
-  () => [form.value.plateColor, form.value.plate] as const,
+  [() => form.value.plateColor, () => form.value.plate],
   () => {
     applyTruckTypeFromLastWheels()
   },
@@ -874,6 +940,7 @@ function onEditPlate() {
   licensePlateRef.value?.show()
 }
 function onPlateConfirm(plate: string, color: string) {
+  manualField('plate')
   form.value.plate = plate || '--'
   form.value.plateColor = color
   if (plate && plate !== '--') void applyPlateHistory(plate)
@@ -963,10 +1030,10 @@ async function loadPlateHistory(plate: string, sessionId: string) {
     if (d.gc_plate && isFormBlank(form.value.plateGc)) {
       form.value.plateGc = d.gc_plate
     }
-    if (d.vehicle_type && isFormBlank(form.value.truckType)) {
+    if (d.vehicle_type && !manualFields.value.truckType && isFormBlank(form.value.truckType)) {
       form.value.truckType = d.vehicle_type
     }
-    if (d.vehicle_container_type && isFormBlank(form.value.containerType)) {
+    if (d.vehicle_container_type && !manualFields.value.containerType && isFormBlank(form.value.containerType)) {
       form.value.containerType = d.vehicle_container_type
     }
     // 点云未到达前保留历史回填；本次最新点云到达后自动覆盖历史尺寸。
@@ -1269,31 +1336,20 @@ function onEvidenceImagesConfirm(choices: EvidenceChoice[]) {
   evidencePickerItems.value = null
 }
 
-/** 将 AI 货物列表回填到表单（与农产品选择器同结构） */
-function applyAiGoodsFill(
-  goods: { code?: string; name?: string; pinyin?: string }[],
-  source: string,
-) {
-  const items = (goods || [])
-    .filter((g) => (g.code || g.name || '').trim())
-    .map((g) => ({
-      productCode: String(g.code || '').trim(),
-      varietyName: String(g.name || '').trim(),
-      varietyNamePinYin: String(g.pinyin || '').trim(),
-    }))
-  if (!items.length) return
-  previousSelection.value = items
-  form.value.goods = items.map((i) => i.varietyName).filter(Boolean).join('|')
-  form.value.goodsProductCode = items.map((i) => i.productCode).filter(Boolean).join('|')
-  form.value.goodsVarietyPinYin = items.map((i) => i.varietyNamePinYin).filter(Boolean).join('|')
-  console.info(
-    `[AI货物识别·${source}]`,
-    form.value.goods || form.value.goodsProductCode,
-  )
+/** AI只生成推荐；确认农产品选择时才修改业务表单。 */
+const goodsRecommendations = ref<GoodsRecommendation[]>([])
+const goodsAiMessage = ref('')
+const goodsPhotoCache = new Map<string, GoodsRecommendation[]>()
+
+async function fetchAiImage(src: string) {
+  const match = src.match(/^\/api\/temp-images\/([a-zA-Z0-9_-]+)(?:\?.*)?$/)
+  if (!match) return fetch(src)
+  const token = localStorage.getItem('lvtong_token') || sessionStorage.getItem('lvtong_token')
+  return fetch(`${appConfig.apiBaseUrl}/imaging/ai-source/${match[1]}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
 }
 
 async function postAiGoodsDetect(endpoint: string, imageUrl: string, filename: string) {
-  const imgRes = await fetch(imageUrl)
+  const imgRes = await fetchAiImage(imageUrl)
   if (!imgRes.ok) throw new Error(`读取图片失败: HTTP ${imgRes.status}`)
   const blob = await imgRes.blob()
   const fd = new FormData()
@@ -1333,100 +1389,73 @@ async function postAiGoodsDetect(endpoint: string, imageUrl: string, filename: s
   return json.data
 }
 
-/** AI 货物实物图（静默）：货物照片到位后自动识别 */
+/** 对当前实拍照片逐张识别，同品取最高置信度，始终保留人工选择。 */
 const aiGoodsRealBusy = ref(false)
 let aiGoodsRealSeq = 0
 let aiGoodsRealLastKey = ''
+let aiGoodsRealActiveKey = ''
 let aiGoodsRealTimer: ReturnType<typeof setTimeout> | null = null
 
-async function runAiGoodsRealSilent(imageUrl: string, key: string) {
-  if (aiGoodsRealBusy.value && aiGoodsRealLastKey === key) return
-  aiGoodsRealLastKey = key
-  const seq = ++aiGoodsRealSeq
+function currentGoodsPhotos() {
+  return [...new Set((captureLists.value.goods || []).filter(src => !cropGoodsImages.has(src)))]
+}
+
+async function runAiGoodsRealSilent(photos: string[], seq: number) {
   aiGoodsRealBusy.value = true
-  try {
-    const data = await postAiGoodsDetect('ai-goods-real', imageUrl, 'goods.jpg')
+  goodsAiMessage.value = ''
+  let failures = 0
+  for (const url of photos) {
     if (seq !== aiGoodsRealSeq) return
-    applyAiGoodsFill(data.goods || [], '实物')
-  } catch (e) {
-    if (seq !== aiGoodsRealSeq) return
-    console.warn('[AI货物识别·实物]', e instanceof Error ? e.message : e)
-  } finally {
-    if (seq === aiGoodsRealSeq) aiGoodsRealBusy.value = false
+    if (goodsPhotoCache.has(url)) continue
+    try {
+      const data = await postAiGoodsDetect('ai-goods-real', url, 'goods.jpg')
+      if (seq !== aiGoodsRealSeq) return
+      const items = (data.goods || []).map(g => ({ code: g.code || '', name: g.name || '', pinyin: g.pinyin, score: Number(g.score) }))
+      goodsPhotoCache.set(url, items)
+    } catch {
+      if (seq !== aiGoodsRealSeq) return
+      failures++
+    }
   }
+  if (seq !== aiGoodsRealSeq) return
+  goodsRecommendations.value = mergeGoodsRecommendations(photos.map(url => goodsPhotoCache.get(url) || []))
+  aiGoodsRealLastKey = failures ? '' : photos.join('|')
+  goodsAiMessage.value = failures
+    ? `${failures}张照片识别失败，可刷新推荐；仍可搜索并手动选择`
+    : goodsRecommendations.value.length ? 'AI提示已优先排列，请核对后选择' : '暂无AI提示，可搜索并手动选择'
+  aiGoodsRealBusy.value = false
+  aiGoodsRealActiveKey = ''
 }
 
 function scheduleAiGoodsReal() {
-  if (applyingSharedDraft) return
-  if (aiGoodsRealTimer) clearTimeout(aiGoodsRealTimer)
+  const photos = currentGoodsPhotos()
+  const key = photos.join('|')
+  if (key && key === aiGoodsRealActiveKey && (aiGoodsRealBusy.value || aiGoodsRealTimer)) return
+  if (aiGoodsRealTimer) { clearTimeout(aiGoodsRealTimer); aiGoodsRealTimer = null }
+  if (key && key === aiGoodsRealLastKey) return
+  if (!applyingSharedDraft) aiMarks.value.goods = ''
+  const seq = ++aiGoodsRealSeq
+  aiGoodsRealBusy.value = false
+  goodsRecommendations.value = mergeGoodsRecommendations(photos.map(url => goodsPhotoCache.get(url) || []))
+  for (const url of goodsPhotoCache.keys()) if (!photos.includes(url)) goodsPhotoCache.delete(url)
+  if (!photos.length) { goodsAiMessage.value = ''; aiGoodsRealLastKey = ''; return }
+  aiGoodsRealActiveKey = key
   aiGoodsRealTimer = setTimeout(() => {
     aiGoodsRealTimer = null
-    // 框选截图可为透视/3D，不把它作为相机实物图再次发送AI实物识别。
-    const list = (captureLists.value.goods || []).filter(src => !cropGoodsImages.has(src))
-    const url = list[list.length - 1] || ''
-    if (!url) return
-    const key = list.join('|')
-    if (key === aiGoodsRealLastKey && form.value.goods) return
-    void runAiGoodsRealSilent(url, key)
+    void runAiGoodsRealSilent(photos, seq)
   }, 500)
 }
 
-watch(
-  () => (captureLists.value.goods || []).filter(src => !cropGoodsImages.has(src)).join('|'),
-  (key) => {
-    if (!key) {
-      aiGoodsRealLastKey = ''
-      return
-    }
-    scheduleAiGoodsReal()
-  },
-)
-
-/** AI 货物透视图（静默）：透视拼接图到位后自动识别 */
-const aiGoodsXrayBusy = ref(false)
-let aiGoodsXraySeq = 0
-let aiGoodsXrayLastKey = ''
-let aiGoodsXrayTimer: ReturnType<typeof setTimeout> | null = null
-
-async function runAiGoodsXraySilent(mosaic: string) {
-  if (aiGoodsXrayBusy.value && aiGoodsXrayLastKey === mosaic) return
-  aiGoodsXrayLastKey = mosaic
-  const seq = ++aiGoodsXraySeq
-  aiGoodsXrayBusy.value = true
-  try {
-    const data = await postAiGoodsDetect('ai-goods-xray', mosaic, 'mosaic.jpg')
-    if (seq !== aiGoodsXraySeq) return
-    applyAiGoodsFill(data.goods || [], '透视')
-  } catch (e) {
-    if (seq !== aiGoodsXraySeq) return
-    console.warn('[AI货物识别·透视]', e instanceof Error ? e.message : e)
-  } finally {
-    if (seq === aiGoodsXraySeq) aiGoodsXrayBusy.value = false
-  }
+function refreshGoodsRecommendations() {
+  goodsPhotoCache.clear()
+  aiGoodsRealLastKey = ''
+  aiGoodsRealActiveKey = ''
+  scheduleAiGoodsReal()
 }
 
-function scheduleAiGoodsXray() {
-  if (applyingSharedDraft) return
-  if (aiGoodsXrayTimer) clearTimeout(aiGoodsXrayTimer)
-  aiGoodsXrayTimer = setTimeout(() => {
-    aiGoodsXrayTimer = null
-    const mosaic = xrayImageUrls.value.mosaic
-    if (!mosaic) return
-    if (mosaic === aiGoodsXrayLastKey && form.value.goods) return
-    void runAiGoodsXraySilent(mosaic)
-  }, 500)
-}
+watch(() => currentGoodsPhotos().join('|'), scheduleAiGoodsReal)
 
-watch(
-  () => xrayImageUrls.value.mosaic,
-  (mosaic) => {
-    if (!mosaic) {
-      aiGoodsXrayLastKey = ''
-      return
-    }
-    scheduleAiGoodsXray()
-  },
-)
+// 透视区域及分类本轮不启用，不再发送旧product_xray请求。
 
 const licensePaths = ref({ license: '', licenseGc: '', licenseStitched: '' })
 
@@ -1443,19 +1472,21 @@ const weightInputError = computed(() => {
 
 /** AI 行驶证裁剪（静默）：主行驶证到位后自动调用；可带挂车证一起裁 */
 const aiLicenseCropBusy = ref(false)
+const licenseAiStatus = ref('')
+const licenseAiError = ref(false)
 let aiLicenseCropSeq = 0
 let aiLicenseCropLastKey = ''
 let aiLicenseCropTimer: ReturnType<typeof setTimeout> | null = null
 
 async function srcToFileForAi(src: string, filename: string): Promise<File> {
-  const res = await fetch(src)
+  const res = await fetchAiImage(src)
   if (!res.ok) throw new Error(`读取图片失败: ${res.status}`)
   const blob = await res.blob()
   return new File([blob], filename, { type: blob.type || 'image/jpeg' })
 }
 
 /** 行驶证 OCR：填车牌（仅空时）+ 出口称重区间提示 */
-async function runLicenseOcrSilent(imageSrc: string) {
+async function runLicenseOcrSilent(imageSrc: string, seq: number) {
   if (!imageSrc) return
   try {
     const fd = new FormData()
@@ -1492,13 +1523,15 @@ async function runLicenseOcrSilent(imageSrc: string) {
       }
     }
     if (!res.ok || json.code !== 0 || !json.data) {
-      console.warn('[OCR行驶证]', json.message || `HTTP ${res.status}`)
-      return
+      throw new Error(json.message || `OCR失败 HTTP ${res.status}`)
     }
+    if (seq !== aiLicenseCropSeq || aiResultsPaused) return
     const d = json.data
     const plate = String(d.plate_number || '').trim()
-    if (plate && !isUsablePlate(form.value.plate)) {
-      form.value.plate = plate
+    if (aiContext.value.license) aiContext.value.license.ocrDone = true
+    if (plate && canFillAi('plate')) {
+      setAiField('plate', plate)
+      if (aiContext.value.license) aiContext.value.license.plateSource = licensePaths.value.license
       void applyPlateHistory(plate)
       console.info('[OCR行驶证] 已填车牌', plate)
     }
@@ -1507,26 +1540,30 @@ async function runLicenseOcrSilent(imageSrc: string) {
     } else if (d.weight_range_text) {
       weightRangeHint.value = d.weight_range_text
     }
+    aiMarks.value.weightRange = weightRangeHint.value
+    const missing = [!plate ? '车牌' : '', !weightRangeHint.value ? '称重参考范围' : ''].filter(Boolean)
+    if (missing.length) {
+      licenseAiError.value = true
+      licenseAiStatus.value = `未识别到${missing.join('、')}，可重试；已识别字段已标AI`
+    } else if (!licenseAiError.value) licenseAiStatus.value = '裁剪、OCR已完成'
     console.info(
       `[OCR行驶证] hdzzl=${d.hdzzl ?? '-'} zzl=${d.zzl ?? '-'} range=${weightRangeHint.value || '-'}`,
     )
   } catch (e) {
+    if (seq !== aiLicenseCropSeq) return
+    licenseAiError.value = true
+    licenseAiStatus.value = 'OCR未成功，请检查同车正、副页是否清晰后重试'
+    if (aiContext.value.license) aiContext.value.license.ocrDone = true
     console.warn('[OCR行驶证]', e instanceof Error ? e.message : e)
   }
 }
 
-async function runAiLicenseCropSilent(mainSrc: string, hangSrc: string) {
-  const key = `${mainSrc}||${hangSrc}`
-  if (aiLicenseCropBusy.value) {
-    console.info('[AI行驶证裁剪] 跳过：进行中')
-    return
-  }
-  if (key === aiLicenseCropLastKey) {
-    console.info('[AI行驶证裁剪] 跳过：同源已处理')
-    return
-  }
-  const seq = ++aiLicenseCropSeq
+async function runAiLicenseCropSilent(mainSrc: string, hangSrc: string, seq: number) {
+  const licenseBaseRevision = sharedSession.snapshot?.revision ?? 0
+  const plateSource = aiContext.value.license?.plateSource ?? aiContext.value.license?.source ?? ''
   aiLicenseCropBusy.value = true
+  licenseAiError.value = false
+  licenseAiStatus.value = '正在裁剪行驶证…'
   console.info(
     '[AI行驶证裁剪] 开始',
     hangSrc ? '主+挂' : '仅主证',
@@ -1567,82 +1604,127 @@ async function runAiLicenseCropSilent(mainSrc: string, hangSrc: string) {
         mode?: string
       }
     }
-    if (seq !== aiLicenseCropSeq) return
+    if (seq !== aiLicenseCropSeq || aiResultsPaused) return
     if (!res.ok || json.code !== 0 || !json.data?.imageDataUrl) {
       throw new Error(json.message || `AI 裁剪失败（HTTP ${res.status}）`)
     }
 
     const d = json.data
+    aiContext.value.license = { source: d.mainDataUrl || d.imageDataUrl || mainSrc, plateSource, stitchedSource: d.imageDataUrl || '', hangSource: d.hangDataUrl || hangSrc || '', inputSource: mainSrc, inputHangSource: hangSrc, baseRevision: licenseBaseRevision }
+    aiMarks.value.license = d.mainDataUrl ? aiContext.value.license.source : ''
+    aiMarks.value.licenseGc = d.hangDataUrl ? (aiContext.value.license.hangSource || '') : ''
     licensePaths.value = {
       license: d.mainDataUrl || d.imageDataUrl || mainSrc,
       licenseGc: d.hangDataUrl || hangSrc || '',
       licenseStitched: d.imageDataUrl || '',
     }
+    aiMarks.value.license = d.mainDataUrl ? licensePaths.value.license : ''
+    aiMarks.value.licenseGc = d.hangDataUrl ? licensePaths.value.licenseGc : ''
     captureThumbs.value.license =
       licensePaths.value.license || licensePaths.value.licenseGc || ''
     // 成功后记 key，避免对裁剪结果再次触发
     aiLicenseCropLastKey = `${licensePaths.value.license}||${licensePaths.value.licenseGc}`
     console.info('[AI行驶证裁剪] 静默完成', d.mode || '')
-    // 裁剪完成后 OCR：优先主证裁剪图（含正反面信息更完整时也可用拼接图）
-    void runLicenseOcrSilent(
-      licensePaths.value.licenseStitched || licensePaths.value.license,
-    )
+    licenseAiStatus.value = '裁剪完成，正在OCR识别…'
+    // 主车正、副页作为一张输入；主挂拼接图仅用于展示和保存。
+    await runLicenseOcrSilent(licensePaths.value.license, seq)
   } catch (e) {
     if (seq !== aiLicenseCropSeq) return
-    // 失败不记 lastKey，允许下次重试
+    licenseAiError.value = true
+    licenseAiStatus.value = '裁剪未成功，保留原图；正在尝试OCR…'
+    aiLicenseCropLastKey = `${mainSrc}||${hangSrc}`
     console.warn('[AI行驶证裁剪]', e instanceof Error ? e.message : e)
+    aiContext.value.license = { source: mainSrc, plateSource, hangSource: hangSrc, inputSource: mainSrc, inputHangSource: hangSrc, baseRevision: licenseBaseRevision }
+    await runLicenseOcrSilent(mainSrc, seq)
+    if (seq === aiLicenseCropSeq && !licenseAiStatus.value.startsWith('OCR未成功')) {
+      licenseAiStatus.value = licenseAiStatus.value.startsWith('未识别到')
+        ? `裁剪未成功；${licenseAiStatus.value}`
+        : '裁剪未成功，OCR已完成；可重试裁剪'
+    }
   } finally {
     if (seq === aiLicenseCropSeq) aiLicenseCropBusy.value = false
   }
 }
 
 function scheduleAiLicenseCrop() {
-  if (applyingSharedDraft) return
+  if (aiResultsPaused) return
+  const currentKey = `${licensePaths.value.license}||${licensePaths.value.licenseGc}`
+  if (currentKey === aiLicenseCropLastKey) return
+  const seq = ++aiLicenseCropSeq
+  aiLicenseCropBusy.value = false
+  weightRangeHint.value = ''
+  // 保留旧AI车牌的归属；plateSource用于隐藏与新证照不匹配的旧标记。
+  aiMarks.value.weightRange = ''
+  aiMarks.value.license = ''
+  aiMarks.value.licenseGc = ''
   if (aiLicenseCropTimer) clearTimeout(aiLicenseCropTimer)
+  aiLicenseCropBusy.value = true
+  licenseAiStatus.value = '等待行驶证识别…'
   // 稍等挂车证可能随后到达（移动端常分两次上传）；弹窗关窗回写也会走这里
   aiLicenseCropTimer = setTimeout(() => {
     aiLicenseCropTimer = null
     const main = licensePaths.value.license
     const hang = licensePaths.value.licenseGc || ''
     if (!main) {
+      aiLicenseCropBusy.value = false
       console.info('[AI行驶证裁剪] 跳过：无主证')
       return
     }
     const key = `${main}||${hang}`
     // 注意：弹窗关闭时会本地拼一张 licenseStitched，不能据此当成「已 AI 裁切」而跳过
     if (key === aiLicenseCropLastKey) {
+      aiLicenseCropBusy.value = false
       console.info('[AI行驶证裁剪] 跳过：同源已处理')
       return
     }
-    void runAiLicenseCropSilent(main, hang)
+    void runAiLicenseCropSilent(main, hang, seq)
   }, 800)
 }
 
 watch(
-  () => [licensePaths.value.license, licensePaths.value.licenseGc] as const,
-  ([main]) => {
+  [() => licensePaths.value.license, () => licensePaths.value.licenseGc],
+  ([main, hang]) => {
+    // 本机上传确认后，裁剪图的data/blob地址会规范成共享URL；这不是新照片。
+    if (aiContext.value.license?.source === main && (aiContext.value.license.hangSource || '') === hang) {
+      aiLicenseCropLastKey = `${main}||${hang}`
+      // 原终端在裁剪后退出，新页面只补做尚未完成的OCR，不再次裁剪。
+      if (!aiContext.value.license.ocrDone && !aiMarks.value.weightRange && !aiLicenseCropBusy.value && !aiResultsPaused) {
+        const seq = ++aiLicenseCropSeq
+        aiLicenseCropBusy.value = true
+        licenseAiStatus.value = '正在OCR识别…'
+        void runLicenseOcrSilent(main, seq).finally(() => { if (seq === aiLicenseCropSeq) aiLicenseCropBusy.value = false })
+      }
+      return
+    }
     if (!main) {
       aiLicenseCropLastKey = ''
+      aiLicenseCropSeq++
+      aiLicenseCropBusy.value = false
+      weightRangeHint.value = ''
+      licenseAiStatus.value = ''
+      aiMarks.value.weightRange = ''; aiMarks.value.license = ''; aiMarks.value.licenseGc = ''
       return
     }
     scheduleAiLicenseCrop()
   },
 )
 
-/** 任一静默 AI 进行中：暂缓最终提交，避免写入未裁切/未回填的中间态 */
+function retryLicenseAi() {
+  aiLicenseCropLastKey = ''
+  scheduleAiLicenseCrop()
+}
+
+/** 仅用于非阻塞状态提示，AI不是最终提交的前置条件。 */
 const aiSilentBusy = computed(
   () =>
     aiLoadRateBusy.value ||
     aiTruckRealBusy.value ||
-    aiGoodsRealBusy.value ||
-    aiGoodsXrayBusy.value ||
     aiLicenseCropBusy.value,
 )
 
 const aiSilentBusyHint = computed(() => {
   if (!aiSilentBusy.value) return ''
-  if (aiLicenseCropBusy.value) return '行驶证 AI 裁剪中，请稍候…'
-  if (aiGoodsRealBusy.value || aiGoodsXrayBusy.value) return '货物 AI 识别中，请稍候…'
+  if (aiLicenseCropBusy.value) return licenseAiStatus.value || '行驶证处理中，请稍候…'
   if (aiTruckRealBusy.value) return '车型/货箱 AI 识别中，请稍候…'
   if (aiLoadRateBusy.value) return '满载率 AI 计算中，请稍候…'
   return 'AI 处理中，请稍候…'
@@ -1931,6 +2013,9 @@ function onResetConfirmNo() {
 }
 
 function doReset() {
+  applyingAiField = true
+  aiResultsPaused = false
+  aiMarks.value = emptyAiMarks()
   captureDialog.value = null
   showLicenseDialog.value = false
   showPasscodeScan.value = false
@@ -2012,12 +2097,19 @@ function doReset() {
     clearTimeout(aiGoodsRealTimer)
     aiGoodsRealTimer = null
   }
-  aiGoodsXrayLastKey = ''
-  aiGoodsXraySeq += 1
-  if (aiGoodsXrayTimer) {
-    clearTimeout(aiGoodsXrayTimer)
-    aiGoodsXrayTimer = null
-  }
+  goodsRecommendations.value = []
+  aiGoodsRealActiveKey = ''
+  goodsPhotoCache.clear()
+  goodsAiMessage.value = ''
+  aiGoodsRealBusy.value = false
+  aiLicenseCropBusy.value = false
+  aiTruckRealBusy.value = false
+  aiLoadRateBusy.value = false
+  licenseAiStatus.value = ''
+  licenseAiError.value = false
+  manualFields.value = {}
+  aiContext.value = {}
+  applyingAiField = false
   // 清通行码
   passcode.value = null
   scannerEpoch.value++
@@ -2149,7 +2241,19 @@ async function onConfirm() {
   showSubmitPreview.value = true
 }
 
-async function onSubmitConfirmYes(payload?: {
+let submitting = false
+async function onSubmitConfirmYes(payload?: Parameters<typeof submitInspection>[0]) {
+  if (submitting) return
+  submitting = true
+  aiResultsPaused = true
+  aiLicenseCropSeq++; aiTruckRealSeq++; aiLoadRateSeq++; aiGoodsRealSeq++
+  for (const timer of [aiLicenseCropTimer, aiTruckRealTimer, aiLoadRateTimer, aiGoodsRealTimer]) if (timer) clearTimeout(timer)
+  aiLicenseCropBusy.value = false; aiTruckRealBusy.value = false; aiLoadRateBusy.value = false; aiGoodsRealBusy.value = false
+  try { await submitInspection(payload) }
+  finally { submitting = false; aiResultsPaused = false }
+}
+
+async function submitInspection(payload?: {
   result_status?: number
   reviewer_phone?: string
   inspector_phone?: string
@@ -2163,14 +2267,9 @@ async function onSubmitConfirmYes(payload?: {
     return
   }
   updateRadarCloudScreenshot()
-  try { await sharedSession.flush() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
+  try { await sharedSession.flushRequired() } catch { alert('内容尚未同步成功，请重试后再提交'); return }
   showSubmitPreview.value = false
   submitPreview.value = null
-
-  if (aiSilentBusy.value) {
-    alert(aiSilentBusyHint.value || 'AI 处理中，请稍候再提交')
-    return
-  }
 
   // 行驶证 blob: 后端无法读取 → 提交前转 dataURL，保证三件套（拼接/-main/-hang）都能落盘
   async function materializeForSubmit(src: string): Promise<string> {
@@ -2325,6 +2424,9 @@ const showResetConfirmBox = ref(false)
 
 function readSharedDraft(): Draft {
   return {
+    manualFields: manualFields.value,
+    aiContext: aiContext.value,
+    aiMarks: aiMarks.value,
     form: form.value, captureThumbs: captureThumbs.value, captureLists: captureLists.value,
     licensePaths: licensePaths.value, passcode: passcode.value, submitRemark: submitRemark.value,
     previousSelection: previousSelection.value, radarHeadImageUrl: bookingStore.radarHeadImageUrl,
@@ -2375,7 +2477,7 @@ const sharedSession = new InspectionSessionSync({
   apply: (snapshot, draft, changedSession) => {
     const previousPlate = form.value.plate
     const restoreHistory = !syncReady.value || changedSession
-    applyingSharedDraft = !syncReady.value || changedSession || snapshot.activeClientId !== getInspectionClientId()
+    applyingSharedDraft = true
     if (changedSession || snapshot.phase === 'submitted') doReset()
     setInspectionSessionId(snapshot.sessionId)
     if (snapshot.phase === 'submitted') {
@@ -2386,10 +2488,15 @@ const sharedSession = new InspectionSessionSync({
     bookingStore.sharedPhase = snapshot.phase
     if (Object.keys(snapshot.booking).length) bookingStore.syncFromServer(snapshot.booking as unknown as Parameters<typeof bookingStore.syncFromServer>[0])
     if (snapshot.phase === 'detecting') bookingStore.closeDialog()
+    manualFields.value = { ...(draft.manualFields || {}) as typeof manualFields.value }
+    aiContext.value = { ...(draft.aiContext || {}) as typeof aiContext.value }
     if (draft.form) form.value = { ...form.value, ...(draft.form as typeof form.value) }
     if (draft.captureThumbs) captureThumbs.value = { ...(draft.captureThumbs as typeof captureThumbs.value) }
     if (draft.captureLists) captureLists.value = { ...captureLists.value, ...(draft.captureLists as typeof captureLists.value) }
     if (draft.licensePaths) licensePaths.value = { ...licensePaths.value, ...(draft.licensePaths as typeof licensePaths.value) }
+    aiMarks.value = { ...emptyAiMarks(), ...((draft.aiMarks || {}) as Partial<Record<AiField, string>>) }
+    weightRangeHint.value = aiContext.value.license?.source === licensePaths.value.license ? aiMarks.value.weightRange : ''
+    if (aiContext.value.license?.source !== licensePaths.value.license) aiMarks.value.weightRange = ''
     if ('passcode' in draft) passcode.value = draft.passcode as typeof passcode.value
     // 刷新恢复和仅收到共享快照时也补查历史，不依赖后续扫码通知。
     if (restoreHistory || form.value.plate !== previousPlate) void applyPlateHistory(form.value.plate)
@@ -2420,6 +2527,7 @@ const sharedSession = new InspectionSessionSync({
     if (images?.transparent) xrayImageUrls.value = {
       '200': images.transparent['1'] || '', '160': images.transparent['2'] || '', mosaic: images.transparent['3'] || '',
     }
+    if (aiContext.value.truck?.source === bodyImageUrls.value.body) aiTruckRealLastWheel = aiContext.value.truck.wheelCount || 0
     void loadSharedGeometry(snapshot)
     syncReady.value = true
     void nextTick(() => { applyingSharedDraft = false })
@@ -2964,6 +3072,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onXrayDocClick)
+  aiLicenseCropSeq++; aiTruckRealSeq++; aiLoadRateSeq++; aiGoodsRealSeq++
+  for (const timer of [aiLicenseCropTimer, aiTruckRealTimer, aiLoadRateTimer, aiGoodsRealTimer]) {
+    if (timer) clearTimeout(timer)
+  }
   window.clearTimeout(xrayApplyTimer)
   xrayApplyQueued = false
   xrayApplySeq++
@@ -3293,7 +3405,7 @@ const anyDialogOpen = computed(
 
           <div class="form-body">
             <div class="form-row">
-              <label>车牌号码：</label>
+              <label>车牌号码<AiMark v-if="hasAiMark('plate', form.plate)" title="车牌由行驶证OCR补填，请核对" />：</label>
               <span class="field-value" :style="plateColorStyle(form.plateColor)">{{ form.plate }}</span>
               <button class="icon-btn" title="号牌号码编辑" @click="onEditPlate">
                 <img src="/assets/img/a_chxz.png" alt="" />
@@ -3309,8 +3421,8 @@ const anyDialogOpen = computed(
               <label class="label-required"><span class="req-star">*</span>司机电话：</label>
               <input v-model="form.phone" class="field-input" placeholder="请输入11位手机号" />
               <span class="col-gap" />
-              <label class="col-right label-required"><span class="req-star">*</span>货车类型：</label>
-              <select v-model="form.truckType" class="field-input">
+              <label class="col-right label-required"><span class="req-star">*</span>货车类型<AiMark v-if="hasAiMark('truckType', form.truckType)" title="根据AI识别车轴数与车牌颜色判定" />：</label>
+              <select v-model="form.truckType" class="field-input" @change="manualField('truckType')">
                 <option value="">请选择</option>
                 <option v-for="t in truckTypeOptions" :key="t.type_code" :value="t.type_code">
                   {{ t.type_name }}
@@ -3319,13 +3431,13 @@ const anyDialogOpen = computed(
             </div>
 
             <div class="form-row">
-              <label class="label-required"><span class="req-star">*</span>货物名称：</label>
+              <label class="label-required"><span class="req-star">*</span>货物名称<AiMark v-if="hasAiMark('goods', form.goodsProductCode)" title="所选货物来自AI推荐，已经人工确认" />：</label>
               <input v-model="form.goods" class="field-input" placeholder="请选择农产品类型" readonly />
               <button class="icon-btn" title="货物类型选择" @click="onSelectProduct">
                 <img src="/assets/img/a_search.png" alt="" />
               </button>
-              <label class="col-right label-required"><span class="req-star">*</span>货箱类型：</label>
-              <select v-model="form.containerType" class="field-input">
+              <label class="col-right label-required"><span class="req-star">*</span>货箱类型<AiMark v-if="hasAiMark('containerType', form.containerType)" title="货箱类型由AI识别，请核对" />：</label>
+              <select v-model="form.containerType" class="field-input" @change="manualField('containerType')">
                 <option value="">请选择</option>
                 <option v-for="c in containerTypeOptions" :key="c.type_code" :value="c.type_code">
                   {{ c.type_name }}
@@ -3334,8 +3446,8 @@ const anyDialogOpen = computed(
             </div>
 
             <div class="form-row">
-              <label>满载率约(%)：</label>
-              <input v-model="form.loadRate" class="field-input" placeholder="请输入满载率，区间0-100" />
+              <label>满载率约(%)<AiMark v-if="hasAiMark('loadRate', form.loadRate)" title="根据AI货物掩码计算，请核对" />：</label>
+              <input v-model="form.loadRate" class="field-input" placeholder="请输入满载率，区间0-100" @input="manualField('loadRate')" />
               <span class="col-gap" />
               <label class="col-right">轮廓尺寸：</label>
               <input v-model="form.size" class="field-input" placeholder="请输入外轮廓长宽高" readonly />
@@ -3345,7 +3457,7 @@ const anyDialogOpen = computed(
             </div>
 
             <div class="form-row">
-              <label>出口称重(kg)<span v-if="weightRangeHint" class="weight-hint">{{ weightRangeHint }}</span>：</label>
+              <label>出口称重(kg)：</label>
               <div class="field-input-wrap">
                 <input
                   v-model="form.weight"
@@ -3355,6 +3467,7 @@ const anyDialogOpen = computed(
                   title="出口称重需为整数（kg）"
                 />
                 <span v-if="weightInputError" class="field-err-text">{{ weightInputError }}</span>
+                <span v-if="weightRangeHint" class="weight-hint"><AiMark v-if="hasAiMark('weightRange', weightRangeHint)" text="AI参考" title="根据OCR重量字段计算的参考范围，并非实际称重" /> {{ weightRangeHint }} kg</span>
               </div>
               <span class="col-gap" />
               <label class="col-right">查验次数：</label>
@@ -3409,6 +3522,10 @@ const anyDialogOpen = computed(
 <!-- 农产品选择弹窗 -->
     <AgriculturalSelect
       ref="agriculturalSelectRef"
+      :recommendations="goodsRecommendations"
+      :ai-busy="aiGoodsRealBusy"
+      :ai-message="goodsAiMessage"
+      @retry-ai="refreshGoodsRecommendations"
       @confirm="onAgriculturalConfirm"
     />
 
@@ -3454,6 +3571,12 @@ const anyDialogOpen = computed(
       :license-src="licensePaths.license"
       :license-gc-src="licensePaths.licenseGc"
       :license-stitched-src="licensePaths.licenseStitched"
+      :ai-status="licenseAiStatus"
+      :ai-error="licenseAiError"
+      :ai-busy="aiLicenseCropBusy"
+      :main-ai-cropped="hasAiMark('license', licensePaths.license)"
+      :hang-ai-cropped="hasAiMark('licenseGc', licensePaths.licenseGc)"
+      @retry-ai="retryLicenseAi"
       :capture-blocked="isPreGateLaneBlocked"
       @confirm="onLicenseConfirm"
       @close="showLicenseDialog = false"

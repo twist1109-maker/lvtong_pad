@@ -1,3 +1,4 @@
+import { aiChangeAllowed, tagAiChange, type AiGroup } from './aiDraftPolicy.ts'
 export type Draft = Record<string, unknown>
 export interface SessionSnapshot {
   sessionId: string
@@ -12,7 +13,7 @@ export interface SessionSnapshot {
   activeClientId?: string
   geometryCapture?: unknown
 }
-export interface DraftChange { path: string[]; value: unknown }
+export interface DraftChange { path: string[]; value: unknown; origin?: 'ai'; aiGroup?: AiGroup; aiBaseRevision?: number }
 export interface PendingDraft {
   sessionId: string
   revision: number
@@ -23,7 +24,7 @@ export interface DraftOutbox {
   load: () => Promise<PendingDraft | null>
   save: (value: PendingDraft | null) => Promise<void>
 }
-const objectFields = new Set(['form', 'captureThumbs', 'licensePaths', 'captureLists', 'bookingDraft', 'panelImages', 'submissionDraft'])
+const objectFields = new Set(['form', 'captureThumbs', 'licensePaths', 'captureLists', 'bookingDraft', 'panelImages', 'submissionDraft', 'aiMarks', 'manualFields', 'aiContext'])
 const clone = <T>(v: T): T => v == null ? v : JSON.parse(JSON.stringify(v))
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const valueAt = (draft: Draft, path: string[]) => path.reduce<unknown>((value, key) =>
@@ -70,6 +71,8 @@ export class InspectionSessionSync {
   private pendingBases = new Map<string, unknown>()
   private pendingRevision: number | null = null
   private saving: Promise<void> | null = null
+  private savingAiOnly = false
+  private cancelOptionalSave?: () => void
   private loading: Promise<void> | null = null
   private timer?: ReturnType<typeof setTimeout>
   private recoveryTimer?: ReturnType<typeof setTimeout>
@@ -220,6 +223,9 @@ export class InspectionSessionSync {
     // 空闲时直接采用已收到的新版本，减少自动采集/另一终端编辑造成的409。
     if (!this.saving) this.rebase(snapshot)
     this.snapshot = clone(snapshot)
+    for (const [key, change] of this.pending) {
+      if (!aiChangeAllowed(change, snapshot.draft || {})) { this.pending.delete(key); this.pendingBases.delete(key) }
+    }
     this.ready = true
     this.applying = true
     try {
@@ -240,7 +246,7 @@ export class InspectionSessionSync {
       if (!this.pending.size) this.pendingRevision = this.snapshot?.revision ?? null
       const key = change.path.join('.')
       if (!this.pending.has(key)) this.pendingBases.set(key, clone(valueAt(this.observed, change.path)))
-      this.pending.set(key, change)
+      this.pending.set(key, tagAiChange(change, next, this.snapshot?.revision ?? 0))
     }
     this.observed = clone(next)
     if (!this.pending.size) return
@@ -257,17 +263,38 @@ export class InspectionSessionSync {
     this.saving = job
     try { await job } finally { this.saving = null }
   }
+  /** AI保存失败不能阻止人工提交；保留必需的人工编辑和原有同步校验。 */
+  async flushRequired(): Promise<void> {
+    this.discardAi()
+    // 放弃等待AI专用请求；即便它迟到，响应也不再参与本地ACK或覆盖人工草稿。
+    if (this.savingAiOnly) this.cancelOptionalSave?.()
+    if (this.saving && this.savingAiOnly && !this.pending.size) return
+    if (this.saving) { try { await this.saving } catch { /* 下方只重试人工编辑 */ } }
+    this.discardAi()
+    await this.flush()
+  }
+  private discardAi() {
+    for (const [key, change] of this.pending) if (change.origin === 'ai') {
+      this.pending.delete(key); this.pendingBases.delete(key)
+    }
+    void this.persist()
+  }
   private async savePending() {
     let conflicts = 0
     while (this.pending.size && this.snapshot && !this.closed) {
       const snapshot = clone(this.snapshot)
       snapshot.revision = this.pendingRevision ?? snapshot.revision
       const changes = clone([...this.pending.values()])
+      this.savingAiOnly = changes.every(change => change.origin === 'ai')
+      const cancelled = Symbol('optional AI save cancelled')
       try {
         // 本机落盘与网络并行，浏览器存储变慢不能阻塞已经可以发送的编辑。
         void this.persist()
         if (this.closed || this.snapshot?.sessionId !== snapshot.sessionId) continue
-        const result = await this.options.save(snapshot, changes)
+        const optionalCancellation = new Promise<never>((_, reject) => {
+          this.cancelOptionalSave = this.savingAiOnly ? () => reject(cancelled) : undefined
+        })
+        const result = await Promise.race([this.options.save(snapshot, changes), optionalCancellation])
         if (this.closed) return
         if (this.snapshot?.sessionId !== snapshot.sessionId) continue
         for (const change of changes) {
@@ -290,6 +317,7 @@ export class InspectionSessionSync {
         this.options.status(this.pending.size ? '正在同步…' : '已同步', false)
         this.recovered()
       } catch (e) {
+        if (e === cancelled) continue
         if (this.closed) return
         if (this.snapshot?.sessionId !== snapshot.sessionId) continue
         const conflict = e as { status?: number; data?: SessionSnapshot }
@@ -307,6 +335,8 @@ export class InspectionSessionSync {
         if (this.snapshot?.sessionId !== snapshot.sessionId) continue
         this.failed(e)
         throw e
+      } finally {
+        this.cancelOptionalSave = undefined
       }
     }
   }

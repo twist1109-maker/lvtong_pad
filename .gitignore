@@ -26,3 +26,4 @@ tests/session/artifacts/
 *.sw?
 
 tests/bodyRadar/artifacts/
+tests/ai/artifacts/

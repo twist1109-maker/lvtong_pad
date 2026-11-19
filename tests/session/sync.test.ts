@@ -1,7 +1,48 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InspectionSessionSync, diffDraft, type Draft, type SessionSnapshot, type PendingDraft } from '../../src/services/inspectionSessionSync.ts'
+import { tagAiChange } from '../../src/services/aiDraftPolicy.ts'
 const snapshot = (revision = 0): SessionSnapshot => ({ sessionId: 'one', revision, phase: 'detecting', booking: { is_detection: true }, workflow: {}, draft: { form: { plate: '鄂A12345' }, captureLists: { goods: ['pc.jpg'], evidence: [] } } })
+
+test('AI来源按字段同步，清除单项不覆盖其他字段标记', () => {
+  assert.deepEqual(diffDraft({ aiMarks: { plate: '鄂A12345', truckType: '11' } },
+    { aiMarks: { plate: '', truckType: '11' } }), [{ path: ['aiMarks', 'plate'], value: '' }])
+})
+
+test('已裁剪主证不能使新拍挂车证或人工拼接图被误判为可丢弃AI更新', () => {
+  const draft = { aiMarks: { license: '/cropped-main.jpg' }, licensePaths: { license: '/cropped-main.jpg' },
+    aiContext: { license: { source: '/cropped-main.jpg', hangSource: '/cropped-hang.jpg', stitchedSource: '/cropped-stitch.jpg', baseRevision: 2 } } }
+  for (const [field, value] of [['licenseGc', '/manual-new-hang.jpg'], ['licenseStitched', '/manual-stitch.jpg']]) {
+    assert.equal(tagAiChange({ path: ['licensePaths', field!], value }, draft, 3).origin, undefined)
+  }
+  for (const [field, value] of [['license', '/cropped-main.jpg'], ['licenseGc', '/cropped-hang.jpg'], ['licenseStitched', '/cropped-stitch.jpg']]) {
+    assert.equal(tagAiChange({ path: ['licensePaths', field!], value }, draft, 3).origin, 'ai')
+  }
+})
+
+test('另一端人工值优先于未确认AI结果，冲突重试不能复活AI值', async t => {
+  let draft: Draft = {}, saved = 0
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d }, load: async () => ({ ...snapshot(), draft: { form: { truckType: '' } } }),
+    save: async () => { saved++; throw new Error('不应保存被人工覆盖的AI') }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose()); await sync.restore()
+  draft = { form: { truckType: '11' }, aiMarks: { truckType: '11' } }; sync.changed()
+  sync.receive({ ...snapshot(2), draft: { form: { truckType: '16' }, aiMarks: { truckType: '' }, manualFields: { truckType: true } } })
+  await sync.flush()
+  assert.equal((draft.form as Draft).truckType, '16'); assert.equal((draft.aiMarks as Draft).truckType, ''); assert.equal(saved, 0)
+})
+
+test('AI版本不能在重试时升级；提交不等待尚未完成的AI专用保存', async t => {
+  const tagged = tagAiChange({ path: ['form', 'truckType'], value: '11' }, { aiMarks: { truckType: '11' }, aiContext: { truck: { baseRevision: 3 } } }, 8)
+  assert.equal(tagged.aiBaseRevision, 3); assert.equal(tagAiChange(tagged, {}, 20).aiBaseRevision, 3)
+  let draft: Draft = {}, release!: (s: SessionSnapshot) => void
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d }, load: async () => ({ ...snapshot(), draft: {} }),
+    save: async () => new Promise(resolve => { release = resolve }), status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose()); await sync.restore()
+  draft = { aiMarks: { weightRange: '(1-2)' } }; sync.changed()
+  const inFlight = sync.flush()
+  await sync.flushRequired()
+  release({ ...snapshot(1), draft: {} }); await inFlight
+})
 
 test('PC snapshot restores on Pad; photos append and normalize to shared URL', async () => {
   let draft: Draft = {}, applied: SessionSnapshot | null = null
@@ -15,6 +56,32 @@ test('PC snapshot restores on Pad; photos append and normalize to shared URL', a
   assert.deepEqual((draft.captureLists as Draft).goods, ['pc.jpg', '/api/images/pad.jpg'])
   assert.equal(applied!.revision, 1)
   sync.dispose()
+})
+
+test('人工提交不会排在悬挂的AI保存后面，人工字段仍会保存', async t => {
+  let draft: Draft = {}, release!: (s: SessionSnapshot) => void, saves = 0
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s, d) => { draft = d },
+    load: async () => ({ ...snapshot(), draft: {} }),
+    save: async (_s, changes) => {
+      if (++saves === 1) return new Promise(resolve => { release = resolve })
+      assert.equal(changes.some(c => c.origin === 'ai'), false)
+      assert.equal(changes.find(c => c.path.join('.') === 'form.phone')?.value, '13800000000')
+      return { ...snapshot(2), draft: { form: { phone: '13800000000' } } }
+    }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose()); await sync.restore()
+  draft = { aiMarks: { weightRange: '(1-2)' } }; sync.changed()
+  const aiSaving = sync.flush()
+  draft.form = { phone: '13800000000' }; sync.changed()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([sync.flushRequired(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('人工保存被AI请求阻塞')), 300) })])
+    assert.equal(saves, 2)
+  } finally {
+    clearTimeout(timer)
+    release({ ...snapshot(1), draft: { aiMarks: { weightRange: '(1-2)' } } })
+    await aiSaving
+  }
+  assert.equal((draft.form as Draft).phone, '13800000000')
 })
 
 test('live snapshot does not overwrite typing awaiting ACK', async () => {

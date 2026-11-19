@@ -3,9 +3,11 @@
  * 农产品信息查询 — 1:1 对齐 Qt AgriculturalProductDialog + ProductCard
  * 尺寸 1370×820，4 列卡片网格，每页 20，多选跨页记忆
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import type { GoodsRecommendation } from '@/utils/goodsRecommendations'
 import { request } from '@/api/request'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
+import AiMark from '@/components/common/AiMark.vue'
 
 export interface AgriculturalSelection {
   productCode: string
@@ -75,7 +77,15 @@ function sortProducts(list: Product[]): Product[] {
 const emit = defineEmits<{
   confirm: [items: AgriculturalSelection[]]
   close: []
+  retryAi: []
 }>()
+const props = defineProps<{
+  recommendations?: GoodsRecommendation[]
+  aiBusy?: boolean
+  aiMessage?: string
+}>()
+const scores = computed(() => new Map((props.recommendations || []).map(g => [g.code, g.score])))
+let fetchSeq = 0
 
 const visible = ref(false)
 const loading = ref(false)
@@ -137,6 +147,7 @@ function typeBadgeColor(type: string): string {
 }
 
 async function fetchProducts() {
+  const seq = ++fetchSeq
   loading.value = true
   try {
     const params = new URLSearchParams()
@@ -146,12 +157,15 @@ async function fetchProducts() {
     if (kw) params.set('keyword', kw)
     params.set('page', String(page.value))
     params.set('page_size', String(pageSize))
+    for (const item of props.recommendations || []) params.append('recommend_code', item.code)
 
     const res = await request<{ items: Product[]; total: number }>(
       `/dict/products?${params.toString()}`,
     )
+    if (seq !== fetchSeq) return
     if (res.code === 0 && res.data) {
-      products.value = sortProducts(res.data.items || [])
+      products.value = sortProducts(res.data.items || []).sort((a, b) =>
+        (scores.value.get(b.product_code) ?? -1) - (scores.value.get(a.product_code) ?? -1))
       total.value = res.data.total || 0
       const pages = Math.max(1, Math.ceil(total.value / pageSize))
       if (page.value > pages) {
@@ -161,10 +175,15 @@ async function fetchProducts() {
       products.value = []
       total.value = 0
     }
+  } catch {
+    if (seq === fetchSeq) { products.value = []; total.value = 0 }
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) loading.value = false
   }
 }
+watch(() => props.recommendations, () => {
+  if (visible.value) { page.value = 1; void fetchProducts() }
+})
 
 function show(prevSelection: AgriculturalSelection[] = []) {
   visible.value = true
@@ -253,6 +272,10 @@ defineExpose({ show })
       </div>
 
       <div class="body">
+        <div class="ai-recommendation" role="status">
+          <span>{{ aiBusy ? 'AI正在识别…' : (aiMessage || (recommendations?.length ? 'AI提示已优先排列，请核对后选择' : '添加货物实拍照片可获取AI提示')) }}</span>
+          <button type="button" class="ai-refresh" :disabled="aiBusy" @click="emit('retryAi')">刷新</button>
+        </div>
         <fieldset class="filter-box">
           <legend>搜索筛选</legend>
           <div class="filter-row">
@@ -306,6 +329,7 @@ defineExpose({ show })
                   @error="onImgError($event, p.variety_name)"
                 />
                 <span class="card-name">{{ p.variety_name }}</span>
+                <AiMark v-if="scores.has(p.product_code)" text="AI提示" title="AI推荐品种，请核对后选择" />
                 <span class="type-badge" :style="{ backgroundColor: typeBadgeColor(p.product_type) }">
                   {{ p.product_type }}
                 </span>
@@ -343,6 +367,16 @@ defineExpose({ show })
 </template>
 
 <style scoped lang="scss">
+.ai-recommendation { display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px; color: #758079; font-size: 12px; line-height: 22px; }
+.ai-refresh { border: 0; padding: 0 4px; background: transparent; color: #52856e; font: inherit; cursor: pointer; flex-shrink: 0; }
+.ai-refresh:hover:not(:disabled) { color: #28664a; text-decoration: underline; }
+.ai-refresh:disabled { color: #a2aaa6; cursor: default; }
+@media (max-width: 1000px) {
+  .filter-row { flex-wrap: wrap !important; overflow-x: visible !important; }
+  .filter-row .spacer { display: none; }
+  .stats { flex-basis: 100%; }
+  .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
 .overlay {
   position: fixed;
   inset: 0;

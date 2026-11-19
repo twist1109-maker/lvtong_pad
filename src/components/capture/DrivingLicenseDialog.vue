@@ -7,6 +7,7 @@
  */
 import { ref, watch } from 'vue'
 import QtMessageBox from '@/components/common/QtMessageBox.vue'
+import AiMark from '@/components/common/AiMark.vue'
 import DeviceCameraDialog from '@/components/capture/DeviceCameraDialog.vue'
 
 const props = defineProps<{
@@ -14,11 +15,17 @@ const props = defineProps<{
   licenseGcSrc?: string
   licenseStitchedSrc?: string
   captureBlocked?: boolean
+  aiStatus?: string
+  aiError?: boolean
+  aiBusy?: boolean
+  mainAiCropped?: boolean
+  hangAiCropped?: boolean
 }>()
 
 const emit = defineEmits<{
   close: []
   confirm: [payload: { license: string; licenseGc: string; licenseStitched: string }]
+  retryAi: []
 }>()
 
 const license = ref(props.licenseSrc || '')
@@ -216,8 +223,12 @@ async function onClose() {
       </div>
 
       <div class="body">
+        <div class="license-ai" :class="{ error: aiError }" role="status">
+          <span>{{ aiStatus || '每台车的正、副页请拍在同一张图中，主车和挂车分别上传' }}</span>
+          <button type="button" class="btn-action" :disabled="aiBusy || !license" @click="emit('retryAi')">重试识别</button>
+        </div>
         <div class="license-group">
-          <div class="group-title">主行驶证</div>
+          <div class="group-title">主行驶证<AiMark v-if="mainAiCropped && license === licenseSrc" text="AI裁剪" title="当前主行驶证已由AI裁剪" /></div>
           <div class="license-view" @click="onAreaClick('main')">
             <img v-if="license" :src="license" alt="" />
             <span v-else>点击拍摄主行驶证</span>
@@ -225,7 +236,7 @@ async function onClose() {
         </div>
 
         <div class="license-group">
-          <div class="group-title">挂车证</div>
+          <div class="group-title">挂车证<AiMark v-if="hangAiCropped && licenseGc === licenseGcSrc" text="AI裁剪" title="当前挂车证已由AI裁剪" /></div>
           <div class="license-view" @click="onAreaClick('gc')">
             <img v-if="licenseGc" :src="licenseGc" alt="" />
             <span v-else>点击拍摄挂车证</span>
@@ -273,6 +284,8 @@ async function onClose() {
 </template>
 
 <style scoped lang="scss">
+.license-ai { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px; color: #27704a; font-size: 13px; }
+.license-ai.error { color: #b24927; }
 .drv-overlay {
   position: fixed;
   inset: 0;
@@ -348,7 +361,7 @@ async function onClose() {
 }
 
 .license-group {
-  flex: 0 0 260px;
+  flex: 1 1 220px;
   min-height: 0;
   max-height: 260px;
   height: 260px;

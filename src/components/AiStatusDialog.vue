@@ -61,27 +61,20 @@ const tipContainer = computed(() =>
 /** 对齐 onWebServiceClicked → onWebServiceSatusUpdated */
 async function refreshStatus() {
   try {
-    const res = await request<{ aiOnline?: boolean; ocrOnline?: boolean }>('/device/health')
+    const res = await request<{ models?: Record<string, { online?: boolean; state?: string }> }>('/imaging/ai-status')
     if (res.code === 0 && res.data) {
-      applyOcr(!!res.data.ocrOnline)
-      applyAi(!!res.data.aiOnline)
-      emit('statusChange', !!res.data.aiOnline)
+      const models = res.data.models || {}
+      ocrState.value = typeof models.ocr?.online === 'boolean' ? (models.ocr.online ? 'online' : 'offline') : 'unknown'
+      aiState.value = typeof models.axle?.online === 'boolean' ? (models.axle.online ? 'online' : 'offline') : 'unknown'
+      emit('statusChange', aiState.value === 'online')
       return
     }
   } catch {
     /* 仅 UI：探测失败按离线展示 */
   }
-  applyOcr(false)
-  applyAi(false)
+  ocrState.value = 'unknown'
+  aiState.value = 'unknown'
   emit('statusChange', false)
-}
-
-function applyOcr(online: boolean) {
-  ocrState.value = online ? 'online' : 'offline'
-}
-
-function applyAi(online: boolean) {
-  aiState.value = online ? 'online' : 'offline'
 }
 
 const dialogStyle = computed(() => {
