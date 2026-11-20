@@ -3,7 +3,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Program Files/Window
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
  const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
- const errors=[],cases=[],held={truck:[],crop:[],ocr:[]},hold={truck:true,crop:true,ocr:true},calls={truck:0,crop:0,ocr:0},out=path.join(__dirname,'artifacts/real-sync');fs.mkdirSync(out,{recursive:true});
+ const errors=[],cases=[],held={truck:[],crop:[],ocr:[],load:[]},hold={truck:true,crop:true,ocr:true,load:false},calls={truck:0,crop:0,ocr:0,load:0},out=path.join(__dirname,'artifacts/real-sync');fs.mkdirSync(out,{recursive:true});
  let photo='',wsFrames=0;
  const release=kind=>{hold[kind]=false;held[kind].splice(0).forEach(resolve=>resolve())};
  async function wait(check,label){const until=Date.now()+15000;while(!await check()){if(Date.now()>until)throw Error('timeout: '+label);await new Promise(r=>setTimeout(r,40))}}
@@ -20,6 +20,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
     if(u.pathname.includes('/inspection/plate/'))return route.fulfill({json:{code:0,data:{count:0}}});
     if(u.pathname.endsWith('/truck-types'))return route.fulfill({json:{code:0,data:[{type_code:'11',type_name:'一型货车'},{type_code:'16',type_name:'六型货车'}]}});
     if(u.pathname.endsWith('/container-types'))return route.fulfill({json:{code:0,data:[{type_code:'4.1',type_name:'厢式货车'},{type_code:'4.3',type_name:'其他货车'}]}});
+    if(u.pathname.endsWith('/ai-load-rate')){calls.load++;if(hold.load)await new Promise(resolve=>held.load.push(resolve));return route.fulfill({json:{code:0,data:{load_rate_pct:36}}}).catch(()=>{})}
     const kind=u.pathname.endsWith('/ai-truck-real')?'truck':u.pathname.endsWith('/license/ai-crop')?'crop':u.pathname.endsWith('/ocr/driving-license')?'ocr':'';
     if(kind){calls[kind]++;if(hold[kind])await new Promise(resolve=>held[kind].push(resolve));
      return route.fulfill({json:{code:0,data:kind==='truck'?{wheel_count:2,vehicle_type:'11',vehicle_container_type:'4.1'}:kind==='crop'?{mainDataUrl:photo,imageDataUrl:photo,mode:'single'}:{plate_number:'鄂A12345',weight_min:13000,weight_max:16800}}}).catch(()=>{})}
@@ -46,10 +47,16 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    assert.equal(state.truck,'16');assert.equal(state.container,'4.3');assert.equal(state.mark,'');assert.equal(state.range,'(13000-16800)');
   }
   cases.push('真实REST/WS下另一端人工车型车厢优先，AI迟到不覆盖，普通电话更新不取消OCR');
+  await wait(async()=>{const d=(await current()).draft;return d.form.loadRate==='36'&&d.aiMarks.loadRate==='36'&&d.aiContext.load?.container==='4.3'},'AI load rate persisted');
+  for(const page of [a,b])await page.waitForFunction(()=>window.v.form.loadRate==='36'&&window.v.hasAiMark('loadRate',window.v.form.loadRate));
+  for(const [name,page] of [['pc',a],['pad',b]])await page.locator('.form-body').screenshot({path:path.join(out,'load-rate-'+name+'.png')});
+  const loadsBeforeReload=calls.load;
   await a.reload();await a.waitForFunction(()=>document.querySelector('.dashboard')&&document.querySelector('.session-sync-status')?.textContent==='已同步');
   await a.evaluate(()=>{window.v=document.querySelector('.dashboard').__vueParentComponent.setupState});
   assert.equal(await a.evaluate(()=>window.v.manualFields.truckType),true);assert.equal(await a.evaluate(()=>window.v.form.truckType),'16');
   assert.equal(await a.evaluate(()=>window.v.weightRangeHint),'(13000-16800)');cases.push('刷新恢复人工保护、来源与OCR参考，不复活旧AI车型');
+  await a.waitForTimeout(1400);assert.equal(calls.load,loadsBeforeReload);assert.equal(await a.evaluate(()=>window.v.hasAiMark('loadRate',window.v.form.loadRate)),true);
+  cases.push('装载率自动回填与AI标记经真实REST/WS双端持久同步，刷新不重复请求');
   await a.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;const ctx=canvas.getContext('2d');ctx.fillStyle='#7048dc';ctx.fillRect(0,0,32,32);window.v.onCaptureConfirm('top',[canvas.toDataURL('image/png')])});
   await wait(async()=>{const d=(await current()).draft;return d.manualPhotos?.top&&d.captureThumbs.top?.startsWith('/api/images/session_assets/')&&d.captureThumbs.top!==photo},'manual photo persisted');
   const manualTop=(await current()).draft.captureThumbs.top;
@@ -59,6 +66,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await b.evaluate(()=>{window.v=document.querySelector('.dashboard').__vueParentComponent.setupState});
   assert.equal(await b.evaluate(()=>window.v.manualPhotos.top),true);assert.equal((await current()).draft.captureThumbs.top,manualTop);
   cases.push('手动照片通过真实REST/WS双端共享并在刷新后保留，车道恢复后的自动照片不覆盖');
+  hold.load=true;await a.evaluate(manualTop=>window.v.xrayImageUrls={'200':manualTop,'160':'',mosaic:''},manualTop);
+  await wait(()=>held.load.length===2,'both load requests waiting');
+  await b.getByPlaceholder('请输入满载率，区间0-100').fill('87');
+  await wait(async()=>(await current()).draft.manualFields?.loadRate===true,'manual load rate persisted');release('load');
+  for(const page of [a,b])await page.waitForFunction(()=>window.v.form.loadRate==='87'&&!window.v.aiLoadRateBusy&&!window.v.hasAiMark('loadRate',window.v.form.loadRate));
+  await b.reload();await b.waitForFunction(()=>document.querySelector('.dashboard')&&document.querySelector('.session-sync-status')?.textContent==='已同步');
+  await b.evaluate(()=>{window.v=document.querySelector('.dashboard').__vueParentComponent.setupState});assert.equal(await b.evaluate(()=>window.v.form.loadRate),'87');
+  cases.push('装载率请求在途时另一端人工填写优先，迟到结果与刷新均不能覆盖');
   hold.crop=true;await a.evaluate(()=>window.v.retryLicenseAi());await wait(()=>held.crop.length>0,'AI retry is waiting');
   assert.equal(await a.evaluate(()=>window.v.aiSilentBusy),true);
   await a.evaluate(()=>window.v.onSubmitConfirmYes());

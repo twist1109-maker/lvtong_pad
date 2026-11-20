@@ -665,82 +665,108 @@ function onAgriculturalConfirm(items: { productCode: string; varietyName: string
 /** AI满载率：拼接图或200透视图 + 车厢类型，连续出图防抖后计算。 */
 const aiLoadRateImage = computed(() => xrayImageUrls.value.mosaic || xrayImageUrls.value['200'])
 const aiLoadRateBusy = ref(false)
+const aiLoadRateStatus = ref('')
+const aiLoadRateError = ref(false)
 let aiLoadRateSeq = 0
 let aiLoadRateLastKey = ''
 let aiLoadRateTimer: ReturnType<typeof setTimeout> | null = null
+let aiLoadRateController: AbortController | null = null
+
+function stopAiLoadRate() {
+  aiLoadRateSeq++
+  if (aiLoadRateTimer) clearTimeout(aiLoadRateTimer)
+  aiLoadRateTimer = null
+  aiLoadRateController?.abort()
+  aiLoadRateController = null
+  aiLoadRateBusy.value = false
+  aiLoadRateStatus.value = ''
+  aiLoadRateError.value = false
+}
 
 async function runAiLoadRateSilent(mosaic: string, containerCode: string, containerName: string) {
+  if (!canFillAi('loadRate') || !mosaic || !containerCode) return
   const key = `${mosaic}||${containerCode}`
-  if (aiLoadRateBusy.value && aiLoadRateLastKey === key) return
   aiLoadRateLastKey = key
   const seq = ++aiLoadRateSeq
+  const sessionId = getInspectionSessionId()
   const loadBaseRevision = sharedSession.snapshot?.revision ?? 0
+  const current = () => seq === aiLoadRateSeq && !aiResultsPaused && sessionId === getInspectionSessionId()
+    && mosaic === aiLoadRateImage.value && containerCode === form.value.containerType && canFillAi('loadRate')
+  const controller = new AbortController()
+  aiLoadRateController?.abort()
+  aiLoadRateController = controller
+  const timer = setTimeout(() => controller.abort(), 120000)
   aiLoadRateBusy.value = true
+  aiLoadRateStatus.value = 'AI计算中…'
+  aiLoadRateError.value = false
   try {
-    const imgRes = await fetchAiImage(mosaic)
+    const imgRes = await fetchAiImage(mosaic, controller.signal)
     if (!imgRes.ok) throw new Error(`读取拼接图失败: HTTP ${imgRes.status}`)
     const blob = await imgRes.blob()
+    if (!current()) return
     const fd = new FormData()
     fd.append('image', new File([blob], 'mosaic.jpg', { type: blob.type || 'image/jpeg' }))
     fd.append('container_type_code', containerCode)
-    fd.append('container_type_name', containerName)
+    if (containerName) fd.append('container_type_name', containerName)
 
     const token =
       localStorage.getItem('lvtong_token') || sessionStorage.getItem('lvtong_token')
     const headers: Record<string, string> = {}
     if (token) headers.Authorization = `Bearer ${token}`
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 120000)
-    let res: Response
-    try {
-      res = await fetch(`${appConfig.apiBaseUrl}/imaging/ai-load-rate`, {
-        method: 'POST',
-        headers,
-        body: fd,
-        signal: controller.signal,
-      })
-    } finally {
-      clearTimeout(timer)
-    }
+    if (sessionId) headers['X-Inspection-Session'] = sessionId
+    headers['X-Inspection-Client'] = getInspectionClientId()
+    const res = await fetch(`${appConfig.apiBaseUrl}/imaging/ai-load-rate`, {
+      method: 'POST',
+      headers,
+      body: fd,
+      signal: controller.signal,
+    })
 
     const json = (await res.json()) as {
       code: number
       message?: string
       data?: { load_rate_pct?: number; scheme?: string }
     }
-    if (seq !== aiLoadRateSeq || aiResultsPaused) return
+    if (!current()) return
     if (!res.ok || json.code !== 0 || json.data?.load_rate_pct == null) {
-      console.warn('[AI满载率]', json.message || `HTTP ${res.status}`)
-      return
+      throw new Error(json.message || `HTTP ${res.status}`)
     }
+    const rate = json.data.load_rate_pct
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 100) throw new Error('AI装载率结果无效')
     aiContext.value.load = { source: mosaic, container: containerCode, baseRevision: loadBaseRevision }
-    setAiField('loadRate', String(json.data.load_rate_pct))
+    setAiField('loadRate', String(rate))
+    aiLoadRateStatus.value = ''
     console.info(
       `[AI满载率] ${json.data.load_rate_pct}% (${json.data.scheme === 'scheme1_box' ? '厢式·方案1' : '其他·方案2'})`,
     )
   } catch (e) {
-    if (seq !== aiLoadRateSeq) return
+    if (!current()) return
+    aiLoadRateError.value = true
+    aiLoadRateStatus.value = 'AI未算出，可手填或重试'
     console.warn('[AI满载率]', e instanceof Error ? e.message : e)
   } finally {
+    clearTimeout(timer)
+    if (aiLoadRateController === controller) aiLoadRateController = null
     if (seq === aiLoadRateSeq) aiLoadRateBusy.value = false
   }
 }
 
-function scheduleAiLoadRate() {
-  if (aiResultsPaused) return
+function scheduleAiLoadRate(force = false) {
+  if (aiResultsPaused || !canFillAi('loadRate') || !aiLoadRateImage.value || !form.value.containerType) return
+  if (!force && hasAiMark('loadRate', form.value.loadRate)) return
+  if (aiLoadRateBusy.value && aiLoadRateLastKey === `${aiLoadRateImage.value}||${form.value.containerType}`) return
   aiLoadRateBusy.value = true
+  aiLoadRateStatus.value = 'AI计算中…'
+  aiLoadRateError.value = false
   if (aiLoadRateTimer) clearTimeout(aiLoadRateTimer)
   aiLoadRateTimer = setTimeout(() => {
     aiLoadRateTimer = null
     const mosaic = aiLoadRateImage.value
     const code = form.value.containerType
-    if (!mosaic || !code) { aiLoadRateBusy.value = false; return }
+    if (!mosaic || !code || !canFillAi('loadRate')) { aiLoadRateBusy.value = false; return }
     const container = containerTypeOptions.value.find((t) => t.type_code === code)
     const name = container?.type_name || ''
-    if (!name) { aiLoadRateBusy.value = false; return }
-    const key = `${mosaic}||${code}`
-    if (key === aiLoadRateLastKey && form.value.loadRate !== '') { aiLoadRateBusy.value = false; return }
+    if (!force && hasAiMark('loadRate', form.value.loadRate)) { aiLoadRateBusy.value = false; aiLoadRateStatus.value = ''; return }
     void runAiLoadRateSilent(mosaic, code, name)
   }, 1200)
 }
@@ -749,8 +775,9 @@ watch(
   [() => aiLoadRateImage.value, () => form.value.containerType],
   ([mosaic, code]) => {
     // 保留旧AI值的归属，供新结果更新；显示标记由图片来源和货箱类型判断。
-    aiLoadRateSeq++
-    aiLoadRateBusy.value = false
+    stopAiLoadRate()
+    aiLoadRateStatus.value = ''
+    aiLoadRateError.value = false
     if (!mosaic || !code) {
       aiLoadRateLastKey = ''
       return
@@ -758,6 +785,10 @@ watch(
     scheduleAiLoadRate()
   },
 )
+
+watch(() => manualFields.value.loadRate, manual => {
+  if (manual) { stopAiLoadRate(); aiLoadRateStatus.value = ''; aiLoadRateError.value = false }
+})
 
 /** AI 货车/货箱类型（静默）：车身影像「车身图」到位后自动识别 */
 const aiTruckRealBusy = ref(false)
@@ -1343,11 +1374,11 @@ const goodsRecommendations = ref<GoodsRecommendation[]>([])
 const goodsAiMessage = ref('')
 const goodsPhotoCache = new Map<string, GoodsRecommendation[]>()
 
-async function fetchAiImage(src: string) {
+async function fetchAiImage(src: string, signal?: AbortSignal) {
   const match = src.match(/^\/api\/temp-images\/([a-zA-Z0-9_-]+)(?:\?.*)?$/)
-  if (!match) return fetch(src)
+  if (!match) return fetch(src, { signal })
   const token = localStorage.getItem('lvtong_token') || sessionStorage.getItem('lvtong_token')
-  return fetch(`${appConfig.apiBaseUrl}/imaging/ai-source/${match[1]}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  return fetch(`${appConfig.apiBaseUrl}/imaging/ai-source/${match[1]}`, { signal, headers: token ? { Authorization: `Bearer ${token}` } : {} })
 }
 
 async function postAiGoodsDetect(endpoint: string, imageUrl: string, filename: string) {
@@ -2078,11 +2109,7 @@ function doReset() {
   onDeleteCropBoxes()
   resetXrayProcessState()
   aiLoadRateLastKey = ''
-  aiLoadRateSeq += 1
-  if (aiLoadRateTimer) {
-    clearTimeout(aiLoadRateTimer)
-    aiLoadRateTimer = null
-  }
+  stopAiLoadRate()
   aiTruckRealLastKey = ''
   aiTruckRealLastWheel = 0
   aiTruckRealSeq += 1
@@ -2251,7 +2278,8 @@ async function onSubmitConfirmYes(payload?: Parameters<typeof submitInspection>[
   if (submitting) return
   submitting = true
   aiResultsPaused = true
-  aiLicenseCropSeq++; aiTruckRealSeq++; aiLoadRateSeq++; aiGoodsRealSeq++
+  stopAiLoadRate()
+  aiLicenseCropSeq++; aiTruckRealSeq++; aiGoodsRealSeq++
   for (const timer of [aiLicenseCropTimer, aiTruckRealTimer, aiLoadRateTimer, aiGoodsRealTimer]) if (timer) clearTimeout(timer)
   aiLicenseCropBusy.value = false; aiTruckRealBusy.value = false; aiLoadRateBusy.value = false; aiGoodsRealBusy.value = false
   try { await submitInspection(payload) }
@@ -3083,7 +3111,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onXrayDocClick)
-  aiLicenseCropSeq++; aiTruckRealSeq++; aiLoadRateSeq++; aiGoodsRealSeq++
+  stopAiLoadRate()
+  aiLicenseCropSeq++; aiTruckRealSeq++; aiGoodsRealSeq++
   for (const timer of [aiLicenseCropTimer, aiTruckRealTimer, aiLoadRateTimer, aiGoodsRealTimer]) {
     if (timer) clearTimeout(timer)
   }
@@ -3458,7 +3487,13 @@ const anyDialogOpen = computed(
 
             <div class="form-row">
               <label>满载率约(%)<AiMark v-if="hasAiMark('loadRate', form.loadRate)" title="根据AI货物掩码计算，请核对" />：</label>
-              <input v-model="form.loadRate" class="field-input" placeholder="请输入满载率，区间0-100" @input="manualField('loadRate')" />
+              <div class="field-input-wrap load-rate-field">
+                <input v-model="form.loadRate" class="field-input" placeholder="请输入满载率，区间0-100" @input="manualField('loadRate')" />
+                <span v-if="aiLoadRateStatus && !manualFields.loadRate" class="load-rate-hint" role="status">
+                  {{ aiLoadRateStatus }}
+                  <button v-if="aiLoadRateError && !aiLoadRateBusy" type="button" @click="scheduleAiLoadRate(true)">重试</button>
+                </span>
+              </div>
               <span class="col-gap" />
               <label class="col-right">轮廓尺寸：</label>
               <input v-model="form.size" class="field-input" placeholder="请输入外轮廓长宽高" readonly />
@@ -4270,6 +4305,13 @@ const anyDialogOpen = computed(
   font-size: 12px;
   line-height: 1.3;
   color: #dc2626;
+}
+
+.load-rate-hint {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+  button { margin-left: 4px; border: 0; padding: 0; background: transparent; color: #218454; cursor: pointer; font: inherit; }
 }
 
 .weight-hint {

@@ -128,7 +128,7 @@ useAuthStore().user={username:'ai-isolated',realName:'AI本地验证',role:1};ap
   await run(()=>window.aiTest.form.plateColor='');await page.waitForFunction(()=>window.aiTest.form.truckType==='');
   await run(()=>window.aiTest.form.plateColor='1');await page.waitForFunction(()=>window.aiTest.form.truckType==='12');
   await run(()=>{window.aiTest.form.containerType='4.1';window.aiTest.form.loadRate='66';window.aiTest.xrayImageUrls={'200':'/fixture/xray.png','160':'',mosaic:''}});
-  await page.waitForFunction(()=>!window.aiTest.aiLoadRateBusy);assert(calls.includes('/api/imaging/ai-load-rate'));assert.equal(await run(()=>window.aiTest.form.loadRate),'66');cases.push('200单图触发装载率，失败不覆盖原值');
+  await page.waitForTimeout(1400);assert.equal(calls.filter(p=>p.endsWith('/ai-load-rate')).length,0);assert.equal(await run(()=>window.aiTest.form.loadRate),'66');cases.push('人工装载率优先，200图到达不重复请求或覆盖人工值');
   holdGoods=true;await run(()=>window.aiTest.captureLists={goods:['/fixture/late.png'],evidence:[]});
   while(!releaseGoods)await new Promise(r=>setTimeout(r,20));await run(()=>window.aiTest.doReset());releaseGoods();holdGoods=false;
   await page.waitForTimeout(200);assert.equal(await run(()=>window.aiTest.goodsRecommendations.length),0);cases.push('重置丢弃迟到推荐');

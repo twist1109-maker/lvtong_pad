@@ -22,7 +22,7 @@ useAuthStore().user={username:'ai-sync-audit',realName:'AI同步审计',role:1};
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jOj0AAAAASUVORK5CYII=',dataUrl='data:image/png;base64,'+png;
  async function client(flags={}){
   const context=await browser.newContext({viewport:{width:1920,height:1080}}),page=await context.newPage();
-  const c={context,page,flags,calls:{truck:0,crop:0,ocr:0,goods:0,submit:0},release:{},syncReleases:[],revision:0};clients.push(c);
+  const c={context,page,flags,calls:{truck:0,crop:0,ocr:0,goods:0,load:0,submit:0},release:{},syncReleases:[],revision:0};clients.push(c);
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
   if(flags.manualCapture)await page.addInitScript(()=>{
    window.RTCPeerConnection=class{
@@ -48,6 +48,7 @@ useAuthStore().user={username:'ai-sync-audit',realName:'AI同步审计',role:1};
    if(u.pathname.endsWith('/license/ai-crop')){c.calls.crop++;await hold('crop');return route.fulfill({json:{code:0,data:{mainDataUrl:dataUrl,imageDataUrl:dataUrl,mode:'single'}}})}
    if(u.pathname.endsWith('/ocr/driving-license')){c.calls.ocr++;await hold('ocr');return route.fulfill({json:{code:0,data:{plate_number:c.flags.changedOcr&&c.calls.ocr>1?'鄂B54321':'鄂A12345',weight_min:13000,weight_max:16800}}})}
    if(u.pathname.endsWith('/ai-goods-real')){c.calls.goods++;return route.fulfill({json:{code:0,data:{goods:[{code:'29',name:'香蕉',score:.98}]}}})}
+   if(u.pathname.endsWith('/ai-load-rate')){c.calls.load++;await hold('load');return route.fulfill(c.flags.loadFail?{status:502,json:{code:502,message:'上游mask失败'}}:{json:{code:0,data:{load_rate_pct:c.flags.loadInvalid?101:(c.flags.loadValue??36),scheme:'scheme1_box'}}}).catch(()=>{})}
    if(u.pathname.endsWith('/truck-types'))return route.fulfill({json:{code:0,data:[{type_code:'11',type_name:'一型货车'},{type_code:'12',type_name:'二型货车'},{type_code:'16',type_name:'六型货车'}]}});
    if(u.pathname.endsWith('/container-types'))return route.fulfill({json:{code:0,data:[{type_code:'4.1',type_name:'厢式货车'},{type_code:'4.3',type_name:'其他货车'}]}});
    if(u.pathname.includes('/inspection/plate/')){await hold('history');return route.fulfill({json:{code:0,data:c.flags.historyResult?{count:2,vehicle_type:'16',vehicle_container_type:'4.3'}:{count:0}}})}
@@ -212,6 +213,63 @@ useAuthStore().user={username:'ai-sync-audit',realName:'AI同步审计',role:1};
    state=await c.page.evaluate(()=>{const v=document.querySelector('.drv-dialog').__vueParentComponent.setupState;return{main:v.license,hang:v.licenseGc}});
    assert.equal(state.main,dataUrl);assert.equal(state.hang,'');
    result('M02','行驶证弹窗内已手动拍摄或删除的图片不被迟到同步覆盖，未编辑的挂车证正常同步',{manualProtected:true});await close(c);
+  }
+  {
+   const c=await client();await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load.png','160':'',mosaic:''}});
+   await c.page.waitForFunction(()=>window.aiTest.form.loadRate==='36'&&!window.aiTest.aiLoadRateBusy);
+   assert.equal(await c.page.evaluate(()=>window.aiTest.hasAiMark('loadRate',window.aiTest.form.loadRate)),true);
+   assert.equal(await c.page.locator('.load-rate-field').locator('..').locator('label .ai-mark').count(),1);
+   await c.page.locator('.form-body').screenshot({path:path.join(out,'load-rate-success.png')});
+   await c.page.getByPlaceholder('请输入满载率，区间0-100').fill('77');
+   await c.page.evaluate(()=>window.aiTest.xrayImageUrls={'200':'/fixture/load-new.png','160':'',mosaic:''});await c.page.waitForTimeout(1400);
+   assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'77');assert.equal(c.calls.load,1);
+   assert.equal(await c.page.evaluate(()=>window.aiTest.hasAiMark('loadRate',window.aiTest.form.loadRate)),false);
+   result('L01','200透视图自动回填装载率并标AI，人工修改后换图不再覆盖',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({loadFail:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load-fail.png','160':'',mosaic:''}});
+   await c.page.waitForFunction(()=>window.aiTest.aiLoadRateError&&!window.aiTest.aiLoadRateBusy);assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'');
+   await c.page.locator('.form-body').screenshot({path:path.join(out,'load-rate-retry.png')});
+   c.flags.loadFail=false;await c.page.locator('.load-rate-hint button').click();await c.page.waitForFunction(()=>window.aiTest.form.loadRate==='36');
+   assert.equal(c.calls.load,2);assert.equal(await c.page.locator('.load-rate-hint').count(),0);
+   result('L02','装载率失败保留原值，轻量提示重试后成功，不弹窗阻断操作',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({load:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load-old.png','160':'',mosaic:''}});await waitHeld(c,'load');
+   await c.page.evaluate(()=>window.aiTest.xrayImageUrls={...window.aiTest.xrayImageUrls,mosaic:'/fixture/load-mosaic.png'});c.flags.load=false;c.release.load();
+   await c.page.waitForTimeout(100);assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'');
+   await c.page.waitForFunction(()=>window.aiTest.form.loadRate==='36');
+   assert.equal(await c.page.evaluate(()=>window.aiTest.aiContext.load.source),'/fixture/load-mosaic.png');assert.equal(c.calls.load,2);
+   result('L03','拼接图到达后丢弃旧200图迟到结果，使用拼接图重新计算',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({load:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load-manual.png','160':'',mosaic:''}});await waitHeld(c,'load');
+   await snapshot(c,d=>{d.form.loadRate='82';d.manualFields.loadRate=true;d.aiMarks.loadRate=''});c.release.load();
+   await c.page.waitForTimeout(100);assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'82');assert.equal(await c.page.evaluate(()=>window.aiTest.aiLoadRateBusy),false);
+   result('L04','另一端人工填装载率时，当前端等待中的AI结果不覆盖人工值',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({loadInvalid:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load-invalid.png','160':'',mosaic:''}});
+   await c.page.waitForFunction(()=>window.aiTest.aiLoadRateError);assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'');
+   result('L05','装载率超出0至100时不写入业务字段',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client();await snapshot(c,d=>{d.form.containerType='4.1';d.form.loadRate='36';d.aiMarks.loadRate='36';d.aiContext.load={source:'/fixture/restored-load.png',container:'4.1',baseRevision:0};d.panelImages.transparent={'1':'/fixture/restored-load.png'}});
+   await c.page.waitForTimeout(1400);assert.equal(c.calls.load,0);assert.equal(await c.page.evaluate(()=>window.aiTest.hasAiMark('loadRate',window.aiTest.form.loadRate)),true);
+   result('L06','恢复共享草稿已有同图同货箱AI装载率时复用结果，不重复请求',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({load:true,submit:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.plate='鄂A12345';v.form.plateColor='0';v.form.phone='13800000000';v.form.weight='15000';v.form.truckType='16';v.form.containerType='4.3';v.xrayImageUrls={'200':'/fixture/load-submit.png','160':'',mosaic:''}});await waitHeld(c,'load');
+   await c.page.evaluate(()=>window.aiTest.onSubmitConfirmYes());assert.equal(c.calls.submit,1);c.release.load();await c.page.waitForTimeout(100);
+   assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'');
+   result('L07','装载率AI仍在等待时正常提交，旧结果不回填下一辆车',{calls:c.calls});await close(c);
+  }
+  {
+   const c=await client({load:true});await c.page.evaluate(()=>{const v=window.aiTest;v.form.containerType='4.1';v.xrayImageUrls={'200':'/fixture/load-container.png','160':'',mosaic:''}});await waitHeld(c,'load');
+   await c.page.evaluate(()=>window.aiTest.form.containerType='4.3');c.flags.load=false;c.flags.loadValue=58;c.release.load();
+   await c.page.waitForTimeout(100);assert.equal(await c.page.evaluate(()=>window.aiTest.form.loadRate),'');
+   await c.page.waitForFunction(()=>window.aiTest.form.loadRate==='58');assert.equal(await c.page.evaluate(()=>window.aiTest.aiContext.load.container),'4.3');
+   result('L08','换货箱类型丢弃旧计算并按新类型重新回填',{calls:c.calls});await close(c);
   }
   assert.deepEqual(errors,[]);assert.deepEqual(forbidden,[]);
   fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({scope:'生产组件及同步receive，本地模拟响应/延迟/快照顺序，无真实AI/设备/数据库',results,errors,deviceActions:0},null,2));
