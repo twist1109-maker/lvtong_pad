@@ -24,11 +24,21 @@ useAuthStore().user={username:'ai-sync-audit',realName:'AI同步审计',role:1};
   const context=await browser.newContext({viewport:{width:1920,height:1080}}),page=await context.newPage();
   const c={context,page,flags,calls:{truck:0,crop:0,ocr:0,goods:0,submit:0},release:{},syncReleases:[],revision:0};clients.push(c);
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+  if(flags.manualCapture)await page.addInitScript(()=>{
+   window.RTCPeerConnection=class{
+    iceGatheringState='complete';addTransceiver(){} async createOffer(){return{type:'offer',sdp:'v=0\r\n'}}
+    async setLocalDescription(value){this.localDescription=value}
+    async setRemoteDescription(){const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);this.stream=canvas.captureStream(10);this.ontrack?.({streams:[this.stream]})}
+    getReceivers(){return this.stream?.getTracks().map(track=>({track}))||[]}close(){this.stream?.getTracks().forEach(track=>track.stop())}
+   }
+  });
   async function hold(kind){if(c.flags[kind])await new Promise(resolve=>{c.release[kind]=()=>{delete c.release[kind];resolve()}})}
   await page.route('**/*',async route=>{
    const u=new URL(route.request().url());
    if(u.hostname!=='127.0.0.1')return route.abort();
    if(u.pathname.startsWith('/socket.io'))return route.abort();
+   if(c.flags.manualCapture&&u.pathname.startsWith('/mtx/'))return route.fulfill({status:201,contentType:'application/sdp',body:'v=0\r\n'});
+   if(c.flags.manualCapture&&u.pathname.startsWith('/api/capture/camera/')){const photo=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=64;canvas.height=40;return canvas.toDataURL('image/jpeg')});c.manualPhoto=photo;return route.fulfill({json:{code:0,data:{dataUrl:photo}}})}
    if(!u.pathname.startsWith('/api/')&&!u.pathname.startsWith('/fixture/')&&!u.pathname.startsWith('/mtx/'))return route.continue();
    if(u.pathname.endsWith('/inspection/submit')&&c.flags.submit){c.calls.submit++;return route.fulfill({json:{code:0,data:{id:1}}})}
    if(u.pathname.endsWith('/booking/reset')&&c.flags.submit)return route.fulfill({json:{code:0,data:{}}});
@@ -179,6 +189,29 @@ useAuthStore().user={username:'ai-sync-audit',realName:'AI同步审计',role:1};
    await c.page.waitForFunction(()=>window.aiTest.licenseAiStatus==='裁剪、OCR已完成'&&!window.aiTest.aiLicenseCropBusy);
    assert.equal(await c.page.evaluate(()=>window.aiTest.form.plate),'鄂C67890');assert.equal(await c.page.evaluate(()=>window.aiTest.hasAiMark('plate',window.aiTest.form.plate)),false);
    result('C06','换证照可更新旧AI车牌，人工确认后再重试仍保留人工车牌',state);await close(c);
+  }
+  {
+   const c=await client({manualCapture:true});await c.page.evaluate(()=>{const v=window.aiTest;v.sharedSession.receive({sessionId:'audit-session',revision:1,phase:'detecting',booking:{is_detection:true,check_step:1},workflow:{step:1,laneOccupied:true},draft:v.readSharedDraft()});v.onCaptureClick('head')});
+   await c.page.waitForFunction(()=>window.aiTest.isPreGateLaneBlocked&&document.querySelector('.btn-shot')&&!document.querySelector('.btn-shot').disabled);
+   await c.page.getByRole('button',{name:'拍照',exact:true}).click();await c.page.waitForFunction(()=>document.querySelectorAll('.thumb').length===1);
+   await c.page.evaluate(()=>{const v=window.aiTest;v.sharedSession.receive({sessionId:'audit-session',revision:2,phase:'detecting',booking:{is_detection:true,check_step:2},workflow:{step:2,laneOccupied:false,gateReleased:true},draft:{...v.readSharedDraft(),captureThumbs:{head:'/fixture/late-auto.jpg'}}})});
+   await c.page.getByRole('button',{name:'确认选择',exact:true}).click();await c.page.waitForFunction(()=>!document.querySelector('.cap-dialog'));
+   assert.equal(await c.page.evaluate(()=>window.aiTest.captureThumbs.head),c.manualPhoto);assert.equal(await c.page.evaluate(()=>window.aiTest.manualPhotos.head),true);
+   await c.page.evaluate(()=>window.aiTest.onCaptureClick('license'));await c.page.waitForSelector('.drv-dialog');
+   assert.equal(await c.page.evaluate(()=>!!document.querySelector('.drv-dialog').__vueParentComponent.props.captureBlocked),false);
+   result('M01','占用期间右侧仍可手动拍照，解除占用时自动照片不覆盖弹窗内已拍内容',{manualProtected:true});await close(c);
+  }
+  {
+   const c=await client({crop:true});await c.page.evaluate(()=>window.aiTest.onCaptureClick('license'));await c.page.waitForSelector('.drv-dialog');
+   await c.page.evaluate(photo=>{const v=document.querySelector('.drv-dialog').__vueParentComponent.setupState;v.pickTarget='main';v.onCameraCapture(photo);window.aiTest.licensePaths={license:'/fixture/late-license.png',licenseGc:'/fixture/late-hang.png',licenseStitched:''}},dataUrl);
+   await c.page.waitForFunction(()=>document.querySelector('.drv-dialog').__vueParentComponent.props.licenseSrc==='/fixture/late-license.png');
+   let state=await c.page.evaluate(()=>{const v=document.querySelector('.drv-dialog').__vueParentComponent.setupState;return{main:v.license,hang:v.licenseGc}});
+   assert.equal(state.main,dataUrl);assert.equal(state.hang,'/fixture/late-hang.png');
+   await c.page.evaluate(()=>{const v=document.querySelector('.drv-dialog').__vueParentComponent.setupState;v.askDelete('gc');v.onConfirmYes();window.aiTest.licensePaths={license:'/fixture/late-license-2.png',licenseGc:'/fixture/late-hang-2.png',licenseStitched:''}});
+   await c.page.waitForFunction(()=>document.querySelector('.drv-dialog').__vueParentComponent.props.licenseGcSrc==='/fixture/late-hang-2.png');
+   state=await c.page.evaluate(()=>{const v=document.querySelector('.drv-dialog').__vueParentComponent.setupState;return{main:v.license,hang:v.licenseGc}});
+   assert.equal(state.main,dataUrl);assert.equal(state.hang,'');
+   result('M02','行驶证弹窗内已手动拍摄或删除的图片不被迟到同步覆盖，未编辑的挂车证正常同步',{manualProtected:true});await close(c);
   }
   assert.deepEqual(errors,[]);assert.deepEqual(forbidden,[]);
   fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({scope:'生产组件及同步receive，本地模拟响应/延迟/快照顺序，无真实AI/设备/数据库',results,errors,deviceActions:0},null,2));

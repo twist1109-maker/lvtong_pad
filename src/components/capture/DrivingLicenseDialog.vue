@@ -32,6 +32,7 @@ const license = ref(props.licenseSrc || '')
 const licenseGc = ref(props.licenseGcSrc || '')
 /** 拼接图（提交确认 / 落库）；主页分开展示仍用 license / licenseGc */
 const licenseStitched = ref(props.licenseStitchedSrc || '')
+const edited = { main: false, gc: false }
 
 const confirmMsg = ref('')
 const confirmVisible = ref(false)
@@ -46,9 +47,9 @@ const tipOk = ref(true)
 watch(
   () => [props.licenseSrc, props.licenseGcSrc, props.licenseStitchedSrc],
   () => {
-    license.value = props.licenseSrc || ''
-    licenseGc.value = props.licenseGcSrc || ''
-    licenseStitched.value = props.licenseStitchedSrc || ''
+    if (!edited.main) license.value = props.licenseSrc || ''
+    if (!edited.gc) licenseGc.value = props.licenseGcSrc || ''
+    if (!edited.main && !edited.gc) licenseStitched.value = props.licenseStitchedSrc || ''
   },
 )
 
@@ -100,9 +101,11 @@ function onCameraCapture(dataUrl: string) {
   if (!target) return
   pickTarget.value = null
   if (target === 'main') {
+    edited.main = true
     if (license.value.startsWith('blob:')) URL.revokeObjectURL(license.value)
     license.value = dataUrl
   } else {
+    edited.gc = true
     if (licenseGc.value.startsWith('blob:')) URL.revokeObjectURL(licenseGc.value)
     licenseGc.value = dataUrl
   }
@@ -133,10 +136,12 @@ function askDelete(which: 'main' | 'gc') {
 function onConfirmYes() {
   confirmVisible.value = false
   if (pendingDel === 'main') {
+    edited.main = true
     if (license.value.startsWith('blob:')) URL.revokeObjectURL(license.value)
     license.value = ''
     licenseStitched.value = ''
   } else if (pendingDel === 'gc') {
+    edited.gc = true
     if (licenseGc.value.startsWith('blob:')) URL.revokeObjectURL(licenseGc.value)
     licenseGc.value = ''
     licenseStitched.value = ''

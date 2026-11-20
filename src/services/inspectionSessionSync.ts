@@ -24,7 +24,7 @@ export interface DraftOutbox {
   load: () => Promise<PendingDraft | null>
   save: (value: PendingDraft | null) => Promise<void>
 }
-const objectFields = new Set(['form', 'captureThumbs', 'licensePaths', 'captureLists', 'bookingDraft', 'panelImages', 'submissionDraft', 'aiMarks', 'manualFields', 'aiContext'])
+const objectFields = new Set(['form', 'captureThumbs', 'licensePaths', 'captureLists', 'bookingDraft', 'panelImages', 'submissionDraft', 'aiMarks', 'manualFields', 'manualPhotos', 'aiContext'])
 const clone = <T>(v: T): T => v == null ? v : JSON.parse(JSON.stringify(v))
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const valueAt = (draft: Draft, path: string[]) => path.reduce<unknown>((value, key) =>

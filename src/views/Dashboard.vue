@@ -1296,6 +1296,8 @@ const captureLists = ref<{ goods: string[]; evidence: string[] }>({
   goods: [],
   evidence: [],
 })
+// 当前检测内手动确认/删除的照片优先于自动采集；随草稿跨端恢复。
+const manualPhotos = ref<Record<string, boolean>>({})
 const cropGoodsImages = new Set<string>()
 const evidenceSourceKeys = new Set<string>()
 const evidencePickerItems = shallowRef<EvidenceCandidate[] | null>(null)
@@ -1770,6 +1772,7 @@ function onCaptureClick(key: CaptureKey) {
 }
 
 function onCaptureConfirm(kind: CaptureKind, images: string[]) {
+  manualPhotos.value[kind] = true
   if (kind === 'goods') {
     captureLists.value.goods = images
     captureThumbs.value.goods = images[0] || ''
@@ -1786,6 +1789,7 @@ function onLicenseConfirm(payload: {
   licenseGc: string
   licenseStitched: string
 }) {
+  if (payload.license !== licensePaths.value.license || payload.licenseGc !== licensePaths.value.licenseGc) manualPhotos.value.license = true
   licensePaths.value = {
     license: payload.license || '',
     licenseGc: payload.licenseGc || '',
@@ -2016,6 +2020,7 @@ function doReset() {
   applyingAiField = true
   aiResultsPaused = false
   aiMarks.value = emptyAiMarks()
+  manualPhotos.value = {}
   captureDialog.value = null
   showLicenseDialog.value = false
   showPasscodeScan.value = false
@@ -2424,6 +2429,7 @@ const showResetConfirmBox = ref(false)
 
 function readSharedDraft(): Draft {
   return {
+    manualPhotos: manualPhotos.value,
     manualFields: manualFields.value,
     aiContext: aiContext.value,
     aiMarks: aiMarks.value,
@@ -2489,6 +2495,7 @@ const sharedSession = new InspectionSessionSync({
     if (Object.keys(snapshot.booking).length) bookingStore.syncFromServer(snapshot.booking as unknown as Parameters<typeof bookingStore.syncFromServer>[0])
     if (snapshot.phase === 'detecting') bookingStore.closeDialog()
     manualFields.value = { ...(draft.manualFields || {}) as typeof manualFields.value }
+    manualPhotos.value = { ...(draft.manualPhotos || {}) as Record<string, boolean> }
     aiContext.value = { ...(draft.aiContext || {}) as typeof aiContext.value }
     if (draft.form) form.value = { ...form.value, ...(draft.form as typeof form.value) }
     if (draft.captureThumbs) captureThumbs.value = { ...(draft.captureThumbs as typeof captureThumbs.value) }
@@ -2774,9 +2781,13 @@ function setupWS() {
           group?: number
           url?: string
           urls?: Record<string, string>
+          origin?: string
+          sessionId?: string
         }
       | undefined
     if (!data?.imageType) return
+    if (data.sessionId && data.sessionId !== getInspectionSessionId()) return
+    if (data.origin !== 'manual' && manualPhotos.value[data.imageType]) return
 
     const withCacheBust = (raw: string) => {
       const apiUrl = toImageUrl(raw)
@@ -3557,7 +3568,6 @@ const anyDialogOpen = computed(
     <CaptureCameraDialog
       v-if="captureDialog"
       :kind="captureDialog"
-      :capture-blocked="isPreGateLaneBlocked"
       :initial-images="captureDialogInitial"
       @confirm="(imgs) => onCaptureConfirm(captureDialog!, imgs)"
       @close="captureDialog = null"
@@ -3577,7 +3587,6 @@ const anyDialogOpen = computed(
       :main-ai-cropped="hasAiMark('license', licensePaths.license)"
       :hang-ai-cropped="hasAiMark('licenseGc', licensePaths.licenseGc)"
       @retry-ai="retryLicenseAi"
-      :capture-blocked="isPreGateLaneBlocked"
       @confirm="onLicenseConfirm"
       @close="showLicenseDialog = false"
     />

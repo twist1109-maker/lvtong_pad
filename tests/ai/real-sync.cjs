@@ -50,6 +50,15 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await a.evaluate(()=>{window.v=document.querySelector('.dashboard').__vueParentComponent.setupState});
   assert.equal(await a.evaluate(()=>window.v.manualFields.truckType),true);assert.equal(await a.evaluate(()=>window.v.form.truckType),'16');
   assert.equal(await a.evaluate(()=>window.v.weightRangeHint),'(13000-16800)');cases.push('刷新恢复人工保护、来源与OCR参考，不复活旧AI车型');
+  await a.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;const ctx=canvas.getContext('2d');ctx.fillStyle='#7048dc';ctx.fillRect(0,0,32,32);window.v.onCaptureConfirm('top',[canvas.toDataURL('image/png')])});
+  await wait(async()=>{const d=(await current()).draft;return d.manualPhotos?.top&&d.captureThumbs.top?.startsWith('/api/images/session_assets/')&&d.captureThumbs.top!==photo},'manual photo persisted');
+  const manualTop=(await current()).draft.captureThumbs.top;
+  await a.request.post('http://127.0.0.1:5197/fixture/auto-photo',{data:{kind:'top',url:photo}});
+  for(const page of [a,b])await page.waitForFunction(manualTop=>window.v.manualPhotos.top&&window.v.captureThumbs.top===manualTop,manualTop);
+  await b.reload();await b.waitForFunction(()=>document.querySelector('.dashboard')&&document.querySelector('.session-sync-status')?.textContent==='已同步');
+  await b.evaluate(()=>{window.v=document.querySelector('.dashboard').__vueParentComponent.setupState});
+  assert.equal(await b.evaluate(()=>window.v.manualPhotos.top),true);assert.equal((await current()).draft.captureThumbs.top,manualTop);
+  cases.push('手动照片通过真实REST/WS双端共享并在刷新后保留，车道恢复后的自动照片不覆盖');
   hold.crop=true;await a.evaluate(()=>window.v.retryLicenseAi());await wait(()=>held.crop.length>0,'AI retry is waiting');
   assert.equal(await a.evaluate(()=>window.v.aiSilentBusy),true);
   await a.evaluate(()=>window.v.onSubmitConfirmYes());

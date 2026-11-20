@@ -9,6 +9,19 @@ test('AI来源按字段同步，清除单项不覆盖其他字段标记', () => 
     { aiMarks: { plate: '', truckType: '11' } }), [{ path: ['aiMarks', 'plate'], value: '' }])
 })
 
+test('人工照片保护按类别同步，自动快照到达时保留尚未上传的手动照片', async t => {
+  let draft: Draft = {}
+  const sync = new InspectionSessionSync({ read: () => draft, apply: (_s,d) => { draft=d },
+    load: async () => ({ ...snapshot(), draft: { captureThumbs: { head: '/auto.jpg', tail: '/tail.jpg' } } }),
+    save: async () => { throw new Error('not used') }, status() {}, pollIntervalMs: 0 })
+  t.after(() => sync.dispose()); await sync.restore()
+  draft.manualPhotos = { head: true }; draft.captureThumbs = { head: '/manual.jpg', tail: '/tail.jpg' }; sync.changed()
+  sync.receive({ ...snapshot(2), draft: { captureThumbs: { head: '/late-auto.jpg', tail: '/new-tail.jpg' } } })
+  assert.equal((draft.captureThumbs as Draft).head, '/manual.jpg')
+  assert.equal((draft.captureThumbs as Draft).tail, '/new-tail.jpg')
+  assert.deepEqual(diffDraft({ manualPhotos: { head: true } }, { manualPhotos: { head: true, top: true } }), [{ path: ['manualPhotos','top'], value: true }])
+})
+
 test('已裁剪主证不能使新拍挂车证或人工拼接图被误判为可丢弃AI更新', () => {
   const draft = { aiMarks: { license: '/cropped-main.jpg' }, licensePaths: { license: '/cropped-main.jpg' },
     aiContext: { license: { source: '/cropped-main.jpg', hangSource: '/cropped-hang.jpg', stitchedSource: '/cropped-stitch.jpg', baseRevision: 2 } } }
